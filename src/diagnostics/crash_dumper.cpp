@@ -14,6 +14,7 @@
 #include "version.h"
 #include "crash_dumper.h"
 #include "session_verdict.h"
+#include "config.h"
 #include <intrin.h>
 
 #include <dbghelp.h>
@@ -274,13 +275,13 @@ static void WriteRegisters(HANDLE hFile, CONTEXT* ctx) {
 // Wine text-format crash report - no dbghelp, no loader lock
 // ================================================================
 static void WriteTextReport(EXCEPTION_POINTERS* ep) {
-    CreateDirectoryA("Crashes", NULL);
+    const char* crashDir = Config::CrashDir();   // creates it, General/LogFolder\Crashes or "Crashes" as before
 
     time_t now = time(nullptr);
     tm tm_buf;
     localtime_s(&tm_buf, &now);
     char filename[MAX_PATH];
-    sprintf_s(filename, sizeof(filename), "Crashes\\wow_crash_%04d%02d%02d_%02d%02d%02d.txt",
+    sprintf_s(filename, sizeof(filename), "%s\\wow_crash_%04d%02d%02d_%02d%02d%02d.txt", crashDir,
               tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
               tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
 
@@ -355,13 +356,13 @@ static MiniDumpWriteDump_fn ResolveSystemMiniDumpWriteDump() {
 }
 
 static void WriteMinidump(EXCEPTION_POINTERS* ep) {
-    CreateDirectoryA("Crashes", NULL);
+    const char* crashDir = Config::CrashDir();   // creates it, General/LogFolder\Crashes or "Crashes" as before
 
     time_t now = time(nullptr);
     tm tm_buf;
     localtime_s(&tm_buf, &now);
     char filename[MAX_PATH];
-    sprintf_s(filename, sizeof(filename), "Crashes\\wow_crash_%04d%02d%02d_%02d%02d%02d.dmp",
+    sprintf_s(filename, sizeof(filename), "%s\\wow_crash_%04d%02d%02d_%02d%02d%02d.dmp", crashDir,
               tm_buf.tm_year + 1900, tm_buf.tm_mon + 1, tm_buf.tm_mday,
               tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
 

@@ -379,8 +379,19 @@ void Init() {
         return;
     }
     if (std::memcmp(target, kPrologue, sizeof(kPrologue)) != 0) {
+        char have[64], want[64];
+        WowOpt_HexBytes(kTarget, have, sizeof(have));
+        char* w = want;
+        for (size_t i = 0; i < sizeof(kPrologue) && w + 4 < want + sizeof(want); ++i) {
+            static const char digits[] = "0123456789ABCDEF";
+            if (i) *w++ = ' ';
+            *w++ = digits[kPrologue[i] >> 4];
+            *w++ = digits[kPrologue[i] & 15];
+        }
+        *w = 0;
         Log("[AsyncPollSpin] NOT active: the bytes at 0x%08X are not the client's sleep wrapper (FrameLimiter, or another "
-            "module, has hooked it first, or this is another client).", (unsigned)kTarget);
+            "module, has hooked it first, or this is another client). Found: %s. Expected the first %u of: %s.",
+            (unsigned)kTarget, have, (unsigned)sizeof(kPrologue), want);
         return;
     }
     if (RunningUnderTranslation()) {

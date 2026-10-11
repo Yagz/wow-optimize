@@ -573,6 +573,8 @@ add_library(wow_optimize SHARED
     src/hooks_subsystems/fast_exit.h
     src/hooks_subsystems/extra_readers.cpp
     src/hooks_subsystems/extra_readers.h
+    src/hooks_subsystems/loading_frame_cap.cpp
+    src/hooks_subsystems/loading_frame_cap.h
     src/hooks_subsystems/timer_calibration.cpp
     src/hooks_subsystems/timer_calibration.h
     src/runtime_vm/lua_collect_skip.cpp
@@ -647,6 +649,11 @@ add_library(wow_optimize SHARED
     src/simd_math/collision_segment_leaf_sse2.cpp
     src/simd_math/collision_segment_leaf_sse2.h
 )
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/core/server_sync_compat.cpp")
+    target_sources(wow_optimize PRIVATE src/core/server_sync_compat.cpp)
+    target_compile_definitions(wow_optimize PRIVATE HAVE_SERVER_SYNC_COMPAT=1)
+endif()
 
 target_link_libraries(wow_optimize PRIVATE
     minhook

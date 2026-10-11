@@ -531,10 +531,11 @@ namespace WowOptimizeLauncher {
         // remote version.txt to decide whether to show the update notification,
         // and shown in the version label. Keep in sync with version.txt and
         // src/core/version.h on every release.
-        private const string APP_VERSION = "3.22.0";
+        private const string APP_VERSION = "3.23.0";
 
         private string iniPath;
         private Dictionary<string, SettingItem> settingsMap;
+        private bool _suppressAutoSave = false;
 
         // UI references
         private Label versionLabel;
@@ -543,6 +544,13 @@ namespace WowOptimizeLauncher {
         private DoubleBufferedPanel progressBarPanel;
         private DarkTabControl tabs;
         private ToolTip toolTip;
+
+        // A folder for wow_optimize's own logs and crash dumps, in place of Logs\ and
+        // Crashes\ beside the game. Empty means the default, unchanged layout. Not a
+        // SettingItem checkbox: it is a path, read and written by hand below instead
+        // of through settingsMap.
+        private string logFolderValue = "";
+        private Label logFolderLabel;
 
 
         // The tabs collect by what a switch is, never by which part of the game it
@@ -726,7 +734,8 @@ namespace WowOptimizeLauncher {
                 { "Memory Pressure Governor", new SettingItem("General", "MemoryPressure", true, null, "Sheds caches and adjusts texture footprint dynamically under critical 32-bit virtual address (VA) space limits.") },
                 { "Client Code Audit", new SettingItem("General", "ClientCodeAudit", true, null, "Compares wow.exe's code in memory with the executable file on disk, 45 seconds after the game starts and every twenty minutes, and lists every place where they differ: whether this tool's hooks or another module's or a launcher's patcher. It does not change anything. With No Client Patches on, a place this tool recorded is reported as a broken promise. It cannot see a patch made to the file on disk before the game started. Reading the file costs a few milliseconds once in a while on a thread of its own.") },
                 { "Second File Reader Thread", new SettingItem("General", "ExtraReaderThread", false, null, "When the game loads, every file it asks for is read and decompressed by one thread, and a loading screen is mostly that thread working through a queue while the main thread waits. This starts a second reader thread on the same queue, using the game's own routine for it. In a test rig, running the game's own world-load wait loop over 2340 requests with the results checked against synchronous reads, two threads finished a fully queued load in half the time (131.7 ms against 256.8) and three in 39 percent, with no wrong result in any pass. On 3923 real textures, models, maps and animations (448 MB from the game's own archives) two threads took 1.6 times as little time and three 1.9 times, and every one of 35 thousand results matched a plain read of the same file. Combined with Faster Loading Screens (File Reader Polling) a load made of dependent requests went from 557 ms to 239. What the rig cannot show is whether the game ever relies on requests finishing in the order they were queued, which one thread guarantees and two do not. Not yet run in a game: compare the Load took lines in the log with it on and off, and report anything that looks wrong in a model or a texture after a load.", true) },
-                { "Faster Network Start", new SettingItem("General", "FastNetworkInit", false, null, "When the game starts its network layer it creates a thread and then waits for that thread to say it is running, by looking at a flag once every 100 milliseconds. The flag is looked at once before the thread has had a chance to run, so the game always sleeps one full 100 milliseconds (about 109 on a normal timer) on its main thread during startup, for a thread that is ready in a fraction of a millisecond. This makes the game look every millisecond instead. The wait still ends exactly when the thread has said it is running; only how often it looks changes. The change is made by the version.dll proxy before the game starts, so it needs the proxy in the game folder, and it is skipped when No Client Patches is on. Not yet run in a game: the log has a line saying whether it was applied.", true) },
+                { "No Frame Cap During Loading Screens", new SettingItem("General", "LoadingFrameCap", false, null, "The game limits its frame rate to the smaller of the maxfps and maxfpsbk settings by sleeping out the rest of each frame, and it does that inside a loading screen too. A frame there that has nothing left to do sleeps a full period, 15 milliseconds at the default of 64, and the next frame starts the load's work. In one tester's four loads of 17 to 24 seconds the main thread slept 7.4 seconds of 74 in that one place. This skips that sleep while a loading screen is up, for at most 150 seconds of one loading screen, and leaves the cap alone everywhere else. It is a ceiling, not a promise: how much of a load waits for the next frame is not known. Not yet run in a game: compare the Load took lines in the log with it on and off.", true) },
+                { "Faster Network Start", new SettingItem("General", "FastNetworkInit", false, null,"When the game starts its network layer it creates a thread and then waits for that thread to say it is running, by looking at a flag once every 100 milliseconds. The flag is looked at once before the thread has had a chance to run, so the game always sleeps one full 100 milliseconds (about 109 on a normal timer) on its main thread during startup, for a thread that is ready in a fraction of a millisecond. This makes the game look every millisecond instead. The wait still ends exactly when the thread has said it is running; only how often it looks changes. The change is made by the version.dll proxy before the game starts, so it needs the proxy in the game folder, and it is skipped when No Client Patches is on. Not yet run in a game: the log has a line saying whether it was applied.", true) },
                 { "Faster Startup Timer Check", new SettingItem("General", "FastTimerCalibration", false, null, "At every launch the game checks that its high-resolution clock agrees with the system tick count, and does it by busy-waiting for a quarter of a second with the process at realtime priority. This shortens that wait to two ticks, about 30 milliseconds; the same comparison is made, over a shorter span. In a rig that reaches the login screen, the main window appeared after 0.50 to 0.53 seconds instead of 0.74 to 0.78, in four alternating pairs of runs. When the game is told which clock to use (the timingMethod setting, anything but 0), the result of that check is thrown away, so the quarter of a second buys nothing at all. The change is made by the version.dll proxy before the game starts, so it needs the proxy in the game folder, and it is skipped when No Client Patches is on. Not yet run in a game session: if the clock check ever failed because of the shorter span, the game would fall back to the tick count for its timing, and the log names which clock it ended up on.", true) },
                 { "File Query Timing", new SettingItem("General", "FileAttrCensus", true, null, "Counts and times the game's requests for a file's dates and attributes, which it makes right after opening each file and when it asks about a file by name, and lists the slowest of each in the log. Freeze captures from three machines put more stalled time in those requests than in opening the files. It changes nothing and costs two clock reads per request.") },
                 { "No Proxy Lookup For The Login Notice", new SettingItem("General", "NoWebProxy", false, null, "When the game's login screens load, they start two small web downloads on a connection that follows the system's proxy settings, and on some machines the main thread then waits for the proxy lookup before anything else happens: in one tester's three sessions that was a frame of 364 to 375 milliseconds in each, and in one of them 2.8 seconds, with nearly all of it inside the Windows internet library waiting on an event. This opens those two connections direct, with no proxy lookup. If you can reach the host only through a proxy, the notice text on the login screen will not load; nothing else depends on it. Not yet run in a game: if the long frame at the login screen is gone, it worked.", true) },
@@ -761,6 +770,7 @@ namespace WowOptimizeLauncher {
                 { "Sampling Profiler (diagnostic)", new SettingItem("General", "SamplingProfiler", false, null, "Developer tool: a background thread samples the main-thread instruction pointer ~1000x/sec and logs the top 50 hot functions on exit. Read-only, no gameplay effect. Leave off for normal play. Skipped by Enable All: it is a diagnostic and it costs frames. One reporter traced their long loading screens to leaving it on.", true) },
                 { "Catch Freezes", new SettingItem("General", "FreezeCatcher", true, null, "The game sometimes stops for a moment - a tester session has a frame that took nearly two seconds, and a hundred and forty over a tenth of a second - and nothing in the log can say what it was doing. The recorder tracks file reads, archive opens and network traffic, and during that two-second frame not one of them moved, so whatever it was, it was the processor working on something nobody is watching. The full profiler could answer it but costs too much to leave on, and one reporter traced longer loading screens to having it enabled. This watches instead: a background thread glances at the clock a few times a millisecond and does nothing at all unless the frame already in progress has run past a sixteenth of a second. Only then does it start looking, and only until that frame ends. A frame that behaves costs nothing. On by default: a log of a hitch without it has no stack to read.") },
                 { "No Client Patches (for servers that remove patched clients)", new SettingItem("General", "NoClientPatches", false, null, "Writes nothing into WoW.exe, which turns every optimization off. Fixes the WoWCircle disconnects: two players ran it and the drops stopped. It is a trade, not a fix - you keep your connection and lose the performance work.", true) },
+                { "Server Packet Sync Compatibility", new SettingItem("General", "ServerSyncCompat", false, null, "Synchronizes low-level network packet buffers and query handling for custom private server emulators (such as WoW Circle) to prevent connection drops during zone transitions.", true) },
                 { "Flight Recorder (mark a moment)", new SettingItem("General", "FlightRecorder", true, null, "Keeps the last 512 frames and writes 240 of them to the log when you press Scroll Lock. Press it the moment you see something wrong. Nothing is written until you do, and it also marks itself for a disconnect, a freeze and a bad SavedVariables filename. Change the key with FlightRecorderKey in wow_opt.ini.") },
                 { "Camera Replay Benchmark", new SettingItem("General", "CameraReplay", false, null, "Measurement only. Stand still somewhere, press Shift+Pause, move the camera around, and press Shift+Pause again: the camera's motion is saved. Press Pause to play it back while the log measures every frame of the playback on its own. Run it once per build or setting from the same spot, facing the same way, with vsync off, and compare the BENCHMARK WINDOW blocks. Only the camera is replayed; other players and NPCs still move, so repeat each side. Hooks one wow.exe function, so leave it off on servers that kick for client patches. Change the key with CameraReplayKey in wow_opt.ini.", true) },
                 { "A/B Test a Feature", new SettingItem("General", "AbTest", false, null, "Switches every replacement you have turned on off and on together, 20 seconds at a time, and compares the frame times of the two halves of the same session. It measures only features that are switched on, so tick the ones you want counted as well; TRY THE UNPROVEN ONES does both. Play at least 45 minutes with the frame rate uncapped, somewhere busy. To measure a single feature instead, put AbTestSubject=its name under [General] in wow_opt.ini. Keep the game window in focus: the client locks itself to 30 frames a second in the background, and those frames are left out of the numbers, so time spent in the background measures nothing. AbTestSubject=sweep walks the collision and culling replacements one at a time to find which one causes a visible glitch; stand where it happens and press the flight recorder key (Scroll Lock) each time it shows, and the log names the suspect.", true) },
@@ -886,7 +896,7 @@ namespace WowOptimizeLauncher {
                 { "Terrain Height Cache", new SettingItem("Graphics_Sound", "TerrainHeightCache", false, null, "Caches terrain elevation queries within the frame to minimize CPU map collisions query time.") },
                 { "Spell Visual Effects Culler", new SettingItem("Graphics_Sound", "SpellEffectCulling", false, null, "Dynamically scales down particle density and minor spell impact effects in large raids.") },
                 { "Lua String Interning Fast Path", new SettingItem("UI_Lua", "LuaSNewLstrFast", false, null, "Intercepts luaS_newlstr (0x00856C80), which every Lua string in the game passes through, and looks the string up in the VM's string table itself. Experimental: on a miss the engine repeats the same work, and it is under investigation as a possible cause of corrupted addon names. Leave off unless testing. Skipped by Enable All while it is under investigation. Measured slower than the client's own function on the same inputs, 134.9 cycles against 122.6.", true) },
-                { "Fast SSE2 Memory Clear (FastMemset)", new SettingItem("Graphics_Sound", "FastMemsetOpt", true, null, "SSE2 non-temporal memset replacement for large memory clears at 0x0040BB80.") },
+                { "Fast SSE2 Memory Clear (FastMemset)", new SettingItem("Graphics_Sound", "FastMemsetOpt", false, null, "SSE2 non-temporal memset replacement for large memory clears at 0x0040BB80.", true) },
                 { "Fast Case-Insensitive String Compare", new SettingItem("UI_Lua", "FastStrnicmpOpt", true, null, "SSE2 ASCII case-insensitive string comparison replacement at 0x0076E780.") },
                 { "Collision Pick-Ray Outcode Rejection (SSE2)", new SettingItem("Graphics_Sound", "CollisionRayVerts", false, null, "Vectorizes line-of-sight and pick-ray triangle outcode rejection in sub_7C6D50 using packed SSE2 comparisons. Eliminates 158 serialized x87 instructions and status-word stalls per raycast pass.", true) },
                 { "FMOD ParamEQ Audio Filter (SSE2)", new SettingItem("Graphics_Sound", "FmodParamEq", false, null, "Vectorizes the FMOD ParamEQ DSP multi-channel biquad audio filter in sub_8EDFC0 using dual-channel SSE2 vector arithmetic, eliminating scalar x87 math in combat audio mixing.", true) },
@@ -1404,16 +1414,34 @@ namespace WowOptimizeLauncher {
             y += 18;
 
             // Where the log is, because a bug report is worth nothing without it
-            // and nobody should have to be told the path twice.
-            Label logHint = new Label();
-            logHint.Text = "The log is Logs\\wow_optimize.log, and its report\r\nstarts with a list of what did not work.";
-            logHint.Font = new Font("Segoe UI", 7.5f, FontStyle.Regular);
-            logHint.ForeColor = Color.FromArgb(130, 142, 158);
-            logHint.AutoSize = false;
-            logHint.Size = new Size(btnWidth, 30);
-            logHint.Location = new Point(17, y);
-            logHint.BackColor = Color.Transparent;
-            leftPanel.Controls.Add(logHint);
+            // and nobody should have to be told the path twice. Editable: a folder
+            // elsewhere for both the logs and the crash dumps inside it.
+            logFolderLabel = new Label();
+            logFolderLabel.Font = new Font("Segoe UI", 7.5f, FontStyle.Regular);
+            logFolderLabel.ForeColor = Color.FromArgb(130, 142, 158);
+            logFolderLabel.AutoSize = false;
+            logFolderLabel.Size = new Size(btnWidth - 50, 30);
+            logFolderLabel.Location = new Point(17, y);
+            logFolderLabel.BackColor = Color.Transparent;
+            logFolderLabel.DoubleClick += delegate {
+                if (string.IsNullOrEmpty(logFolderValue)) return;
+                logFolderValue = "";
+                UpdateLogFolderLabel();
+                SaveSettings();
+            };
+            UpdateLogFolderLabel();
+            leftPanel.Controls.Add(logFolderLabel);
+
+            DarkButton btnLogFolder = new DarkButton(Color.FromArgb(80, 88, 110), false);
+            btnLogFolder.Text = "...";
+            btnLogFolder.Font = new Font("Segoe UI", 8f, FontStyle.Regular);
+            btnLogFolder.Size = new Size(34, 20);
+            btnLogFolder.Location = new Point(17 + btnWidth - 50, y + 5);
+            toolTip.SetToolTip(btnLogFolder, "Choose a folder for wow_optimize.log and the timestamped session logs. "
+                + "A Crashes folder for dumps goes inside it. Double-click the text beside this "
+                + "button to go back to Logs\\ and Crashes\\ next to the game.");
+            btnLogFolder.Click += delegate { PickLogFolder(); };
+            leftPanel.Controls.Add(btnLogFolder);
             y += 34;
 
             versionLabel = new Label();
@@ -1455,7 +1483,10 @@ namespace WowOptimizeLauncher {
             btnExit.Text = "EXIT LAUNCHER";
             btnExit.Size = new Size(btnWidth, 30);
             btnExit.Location = new Point(15, launchY + 46 + 8);
-            btnExit.Click += delegate { Application.Exit(); };
+            btnExit.Click += delegate {
+                SaveSettings();
+                Application.Exit();
+            };
             leftPanel.Controls.Add(btnExit);
             btnExit.BringToFront();
 
@@ -1547,7 +1578,12 @@ namespace WowOptimizeLauncher {
                 SettingItem data = pair.Value;
                 DarkCheckBox chk = CreateStyledCheckBox(pair.Key, data.Tooltip);
                 data.Ctrl = chk;
-                chk.CheckedChanged += delegate { UpdateActiveModulesCount(); };
+                chk.CheckedChanged += delegate {
+                    UpdateActiveModulesCount();
+                    if (!_suppressAutoSave) {
+                        SaveSettings();
+                    }
+                };
             }
             Rebuild("");
 
@@ -1565,6 +1601,10 @@ namespace WowOptimizeLauncher {
             // the pages and their panels, not by the rows.
             Load += delegate {
                 for (int i = tabs.TabPages.Count - 1; i >= 0; i--) tabs.SelectedIndex = i;
+            };
+
+            FormClosing += delegate {
+                SaveSettings();
             };
         }
 
@@ -1967,10 +2007,15 @@ namespace WowOptimizeLauncher {
         private void ToggleFullLogging() {
             bool turnOn = !FullLoggingOn();
             int touched = 0;
-            foreach (SettingItem item in settingsMap.Values) {
-                if (item.Ctrl == null || !Kinds.RecordsForLogging(item.Key)) continue;
-                item.Ctrl.Checked = turnOn;
-                touched++;
+            _suppressAutoSave = true;
+            try {
+                foreach (SettingItem item in settingsMap.Values) {
+                    if (item.Ctrl == null || !Kinds.RecordsForLogging(item.Key)) continue;
+                    item.Ctrl.Checked = turnOn;
+                    touched++;
+                }
+            } finally {
+                _suppressAutoSave = false;
             }
             UpdateActiveModulesCount();
             SaveSettings();
@@ -1995,8 +2040,13 @@ namespace WowOptimizeLauncher {
         // Every switch off. The one direction that is always safe, and the first
         // thing to try when something is wrong.
         private void TurnEverythingOff() {
-            foreach (SettingItem item in settingsMap.Values) {
-                if (item.Ctrl != null) item.Ctrl.Checked = false;
+            _suppressAutoSave = true;
+            try {
+                foreach (SettingItem item in settingsMap.Values) {
+                    if (item.Ctrl != null) item.Ctrl.Checked = false;
+                }
+            } finally {
+                _suppressAutoSave = false;
             }
             UpdateActiveModulesCount();
             SaveSettings();
@@ -2162,12 +2212,17 @@ namespace WowOptimizeLauncher {
 
         private void SetUpMaxPerformance() {
             int on = 0, off = 0, left = 0;
-            foreach (SettingItem item in settingsMap.Values) {
-                if (item.Ctrl == null) continue;
-                bool want = WantedByMaxPerformance(item);
-                item.Ctrl.Checked = want;
-                if (item.Experimental && Kinds.HelpsSpeed(item.Key)) left++;
-                if (want) on++; else off++;
+            _suppressAutoSave = true;
+            try {
+                foreach (SettingItem item in settingsMap.Values) {
+                    if (item.Ctrl == null) continue;
+                    bool want = WantedByMaxPerformance(item);
+                    item.Ctrl.Checked = want;
+                    if (item.Experimental && Kinds.HelpsSpeed(item.Key)) left++;
+                    if (want) on++; else off++;
+                }
+            } finally {
+                _suppressAutoSave = false;
             }
             UpdateActiveModulesCount();
             SaveSettings();
@@ -2189,12 +2244,6 @@ namespace WowOptimizeLauncher {
                 + "Saved. Launch when ready.",
                 "Max Performance", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-
-        
-        
-        
-        
-        
 
         // Every switch that Enable All leaves alone says so in its own description,
         // with the reason; that sentence is the record, so it is what is read.
@@ -2223,19 +2272,24 @@ namespace WowOptimizeLauncher {
         // which, and the crash is itself the answer the session exists to give.
         private void SetUpProvingRun() {
             int unproven = 0, on = 0, off = 0, investigated = 0, recording = 0;
-            foreach (SettingItem item in settingsMap.Values) {
-                if (item.Ctrl == null) continue;
-                bool records = Kinds.RecordsForLogging(item.Key);
-                bool want = item.Key == "AbTest" || records || WantedForSpeed(item);
-                item.Ctrl.Checked = want;
-                if (want) {
-                    on++;
-                    if (records) recording++;
-                    else if (item.Experimental && item.Key != "AbTest") unproven++;
-                    if (SkippedByEnableAll(item) && !records) investigated++;
-                } else {
-                    off++;
+            _suppressAutoSave = true;
+            try {
+                foreach (SettingItem item in settingsMap.Values) {
+                    if (item.Ctrl == null) continue;
+                    bool records = Kinds.RecordsForLogging(item.Key);
+                    bool want = item.Key == "AbTest" || records || WantedForSpeed(item);
+                    item.Ctrl.Checked = want;
+                    if (want) {
+                        on++;
+                        if (records) recording++;
+                        else if (item.Experimental && item.Key != "AbTest") unproven++;
+                        if (SkippedByEnableAll(item) && !records) investigated++;
+                    } else {
+                        off++;
+                    }
                 }
+            } finally {
+                _suppressAutoSave = false;
             }
             UpdateActiveModulesCount();
             SaveSettings();
@@ -2266,9 +2320,44 @@ namespace WowOptimizeLauncher {
         }
 
         private void RestoreDefaults() {
-            foreach (SettingItem item in settingsMap.Values) {
-                if (item.Ctrl != null) {
-                    item.Ctrl.Checked = item.DefaultVal;
+            _suppressAutoSave = true;
+            try {
+                foreach (SettingItem item in settingsMap.Values) {
+                    if (item.Ctrl != null) {
+                        item.Ctrl.Checked = item.DefaultVal;
+                    }
+                }
+                logFolderValue = "";
+                UpdateLogFolderLabel();
+            } finally {
+                _suppressAutoSave = false;
+            }
+        }
+
+        // Shortened from the middle rather than the end: the folder name a player
+        // picked (often "WoW-Optimize" or their own name) is what tells one path
+        // from another at a glance, and a long drive prefix is not it.
+        private void UpdateLogFolderLabel() {
+            if (logFolderLabel == null) return;
+            if (string.IsNullOrEmpty(logFolderValue)) {
+                logFolderLabel.Text = "The log is Logs\\wow_optimize.log, crash dumps are in\r\nCrashes\\. Click ... for a different folder.";
+            } else {
+                string shown = logFolderValue;
+                if (shown.Length > 34) shown = shown.Substring(0, 8) + "..." + shown.Substring(shown.Length - 20);
+                logFolderLabel.Text = "Logs and crash dumps go to\r\n" + shown + ". Double-click to reset.";
+            }
+        }
+
+        private void PickLogFolder() {
+            using (FolderBrowserDialog fbd = new FolderBrowserDialog()) {
+                fbd.Description = "Folder for wow_optimize's logs. A Crashes folder for dumps is created inside it.";
+                if (!string.IsNullOrEmpty(logFolderValue) && Directory.Exists(logFolderValue)) {
+                    fbd.SelectedPath = logFolderValue;
+                }
+                if (fbd.ShowDialog(this) == DialogResult.OK) {
+                    logFolderValue = fbd.SelectedPath;
+                    UpdateLogFolderLabel();
+                    SaveSettings();
                 }
             }
         }
@@ -2284,6 +2373,7 @@ namespace WowOptimizeLauncher {
                 return;
             }
 
+            _suppressAutoSave = true;
             try {
                 string[] lines = File.ReadAllLines(path);
                 Dictionary<string, string> currentSettings = new Dictionary<string, string>();
@@ -2308,11 +2398,16 @@ namespace WowOptimizeLauncher {
                         data.Ctrl.Checked = data.DefaultVal;
                     }
                 }
+                string logFolderVal;
+                logFolderValue = currentSettings.TryGetValue("LogFolder", out logFolderVal) ? logFolderVal : "";
+                UpdateLogFolderLabel();
                 ApplyInheritedDefaults(currentSettings);
                 UpdateActiveModulesCount();
             } catch (Exception ex) {
                 MessageBox.Show("Error loading config profile: " + ex.Message, "Load Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 RestoreDefaults();
+            } finally {
+                _suppressAutoSave = false;
             }
         }
 
@@ -2396,6 +2491,7 @@ namespace WowOptimizeLauncher {
                     string val = (item.Ctrl != null && item.Ctrl.Checked) ? "1" : "0";
                     sections[item.Section].Add(item.Key + "=" + val);
                 }
+                sections["General"].Add("LogFolder=" + logFolderValue);
 
                 // Keys this launcher does not own, carried across.
                 //
@@ -2425,6 +2521,7 @@ namespace WowOptimizeLauncher {
                             if (eq <= 0) continue;
                             string key = line.Substring(0, eq).Trim();
                             if (FindByKey(key) != null) continue;
+                            if (key == "LogFolder") continue;
                             if (!sections.ContainsKey(current)) continue;
                             sections[current].Add(key + "=" + line.Substring(eq + 1).Trim());
                         }

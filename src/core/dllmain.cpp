@@ -58,6 +58,9 @@
 #include "lua_vm_fast.h"
 #include "m2_matrix_slot_sse2.h"
 #include "m2_batch_matrix_sse2.h"
+#if HAVE_SERVER_SYNC_COMPAT
+#include "server_sync_compat.h"
+#endif
 #include "m2_anim_stride.h"
 #include "m2_anim_reuse.h"
 #include "mimalloc_high_arena.h"
@@ -119,6 +122,7 @@
 #include "../hooks_subsystems/async_poll_spin.h"
 #include "../runtime_vm/lua_collect_skip.h"
 #include "../hooks_subsystems/fast_exit.h"
+#include "../hooks_subsystems/loading_frame_cap.h"
 #include "../hooks_subsystems/extra_readers.h"
 #include "../hooks_subsystems/timer_calibration.h"
 #include "../diagnostics/client_code_audit.h"
@@ -1020,7 +1024,7 @@ extern "C" void WowOpt_NoteClientPatchRefused(void) {
 // ---- Roadmap performance features (latency-oriented; FPS is GPU/vsync-bound) ----
 // (TEST_ENABLE_WS_AGGRESSIVE_PIN lives in wow_memory_opt.cpp, where the working set is set.)
 #define TEST_ENABLE_LARGE_PAGES         0   // mimalloc 2MB large OS pages (TLB win on the VA-tight heap). Requires the Windows account to hold 'Lock pages in memory' (secpol.msc -> Local Policies -> User Rights Assignment) — the DLL can only ENABLE a privilege the account already holds, not grant it. Harmless no-op without the grant. 32-bit caveat: large pages reserve in 2MB units; on a VA-tight client this can fragment the 2-3GB user VA, so keep /3GB on and watch LargestFreeBlock.
-#define CRASH_TEST_DISABLE_WOW_STRLEN           0   // sub_76EE30 WoW-internal strlen - ENABLED (SSE2 replacement protected with SEH backstop)
+#define CRASH_TEST_DISABLE_WOW_STRLEN           1   // sub_76EE30 WoW-internal strlen - DISABLED (unshielded hook causes anti-cheat detection and thread race)
 
 // Definition for the WO_EnableHook batching wrapper declared in version.h.
 // While this is 1 (set across MainThread's install sequence), module enables
@@ -1714,8 +1718,12 @@ static void PruneSessionLogs(int keep) {
     static char names[MAX_TRACKED][64];
     int count = 0;
 
+    char pattern[MAX_PATH];
+    _snprintf(pattern, sizeof(pattern), "%s\\wow_optimize_*.log", Config::LogDir());
+    pattern[sizeof(pattern) - 1] = '\0';
+
     WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA("Logs\\wow_optimize_*.log", &fd);
+    HANDLE h = FindFirstFileA(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) return;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
@@ -1745,15 +1753,18 @@ static void PruneSessionLogs(int keep) {
 
     for (int i = keep; i < count; i++) {
         char path[MAX_PATH];
-        _snprintf(path, sizeof(path), "Logs\\%s", names[i]);
+        _snprintf(path, sizeof(path), "%s\\%s", Config::LogDir(), names[i]);
         path[sizeof(path) - 1] = '\0';
         DeleteFileA(path);
     }
 }
 
 static void LogOpen() {
-    CreateDirectoryA("Logs", NULL);
-    
+    const char* logDir = Config::LogDir();   // creates it, General/LogFolder or "Logs" as before
+    char mainLogPath[MAX_PATH];
+    _snprintf(mainLogPath, sizeof(mainLogPath), "%s\\wow_optimize.log", logDir);
+    mainLogPath[sizeof(mainLogPath) - 1] = '\0';
+
     // 1. Standard log (wow_optimize.log) always overwritten to keep latest easy to access
     //
     // Opened deny-write, and when another process already holds it, the next free
@@ -1762,10 +1773,10 @@ static void LogOpen() {
     // names fall outside what PruneSessionLogs matches and are reused, so they
     // cannot pile up.
     char logNote[200] = "";
-    g_log = _fsopen("Logs\\wow_optimize.log", "w", _SH_DENYWR);
+    g_log = _fsopen(mainLogPath, "w", _SH_DENYWR);
     for (int slot = 2; slot <= 8 && !g_log; slot++) {
-        char alt[64];
-        _snprintf(alt, sizeof(alt), "Logs\\wow_optimize.%d.log", slot);
+        char alt[MAX_PATH];
+        _snprintf(alt, sizeof(alt), "%s\\wow_optimize.%d.log", logDir, slot);
         alt[sizeof(alt) - 1] = '\0';
         g_log = _fsopen(alt, "w", _SH_DENYWR);
         if (g_log) {
@@ -1776,7 +1787,7 @@ static void LogOpen() {
         }
     }
     if (!g_log) {
-        g_log = fopen("Logs\\wow_optimize.log", "w");
+        g_log = fopen(mainLogPath, "w");
     }
     
     // 2. Session log with timestamp (wow_optimize_YYYY-MM-DD_HH-MM-SS.log) to preserve history.
@@ -1789,8 +1800,8 @@ static void LogOpen() {
         SYSTEMTIME st;
         GetLocalTime(&st);
         char sessionPath[MAX_PATH];
-        _snprintf(sessionPath, sizeof(sessionPath), "Logs\\wow_optimize_%04d-%02d-%02d_%02d-%02d-%02d.log",
-                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        _snprintf(sessionPath, sizeof(sessionPath), "%s\\wow_optimize_%04d-%02d-%02d_%02d-%02d-%02d.log",
+                  logDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
         sessionPath[sizeof(sessionPath) - 1] = '\0';
         g_sessionLog = _fsopen(sessionPath, "w", _SH_DENYWR);
         if (!g_sessionLog) {
@@ -1798,8 +1809,8 @@ static void LogOpen() {
             // after the time, so the name still starts with the date that
             // PruneSessionLogs sorts on.
             _snprintf(sessionPath, sizeof(sessionPath),
-                      "Logs\\wow_optimize_%04d-%02d-%02d_%02d-%02d-%02d_pid%lu.log",
-                      st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+                      "%s\\wow_optimize_%04d-%02d-%02d_%02d-%02d-%02d_pid%lu.log",
+                      logDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
                       GetCurrentProcessId());
             sessionPath[sizeof(sessionPath) - 1] = '\0';
             g_sessionLog = _fsopen(sessionPath, "w", _SH_DENYWR);
@@ -2447,6 +2458,7 @@ static void WINAPI hooked_Sleep(DWORD ms) {
         SleepTimer sleepTimer(asker, ms);
 
         if (asker == 0x0087DF79 && FastExit::SoundStopSleep(ms)) return;
+        if (asker == 0x00683742 && LoadingFrameCap::SkipSleep(ms)) return;
 
         if (ms == 0) {
             orig_Sleep(0);
@@ -6001,6 +6013,7 @@ static void DumpPeriodicStats(const char* why, bool atProcessExit) {
     STAT_TIME("ExtraReaders::LogStats", ExtraReaders::LogStats());
     STAT_TIME("LuaCollectSkip::LogStats", LuaCollectSkip::LogStats());
     STAT_TIME("FastExit::LogStats", FastExit::LogStats());
+    STAT_TIME("LoadingFrameCap::LogStats", LoadingFrameCap::LogStats());
     STAT_TIME("TimerCalibration::LogStats", TimerCalibration::LogStats());
     STAT_TIME("ClientCodeAudit::LogStats", ClientCodeAudit::LogStats());
     STAT_TIME("FileAttrCensus::LogStats", FileAttrCensus::LogStats());
@@ -6064,6 +6077,11 @@ static void DumpPeriodicStats(const char* why, bool atProcessExit) {
     STAT_TIME("TextureUnloadDelay::LogStats", TextureUnloadDelay::LogStats());
     STAT_TIME("Verdict::LogStats", Verdict::LogStats());
     STAT_TIME("NetDiag::LogStats", NetDiag::LogStats());
+#if HAVE_SERVER_SYNC_COMPAT
+    if (Config::g_settings.OptServerSyncCompat) {
+        STAT_TIME("ServerSyncCompat::LogStats", ServerSyncCompat::LogStats());
+    }
+#endif
     // Said every report, not once at startup, because the whole value of this
     // mode is that a log from it cannot be read as a log from a normal run.
     if (Config::g_settings.OptNoClientPatches) {
@@ -8137,6 +8155,12 @@ static DWORD WINAPI MainThread(LPVOID param) {
     if (MH_Initialize() != MH_OK) { Log("FATAL: MinHook initialization failed"); LogClose(); return 1; }
     Log("MinHook initialized");
 
+#if HAVE_SERVER_SYNC_COMPAT
+    if (Config::g_settings.OptServerSyncCompat) {
+        ServerSyncCompat::Init();
+    }
+#endif
+
     // Early on purpose: the render thread has to see the client create its D3D
     // device, and the client starts creating it while this init is still running.
     GxRT::Init();
@@ -8496,8 +8520,13 @@ static DWORD WINAPI MainThread(LPVOID param) {
     bool lstrOk = Config::g_settings.OptStrStrSse2 && InstallLstrcmpHook();
     Log("--- String Length (lstrlen) ---");
     bool lstrlenOk = Config::g_settings.OptStrStrSse2 && InstallLStrLenHooks();
+#if !CRASH_TEST_DISABLE_WOW_STRLEN
     bool strlen76Ok = Config::g_settings.OptStrStrSse2 && InstallWowStrlenHook();
     if (strlen76Ok) Log("WoW-internal strlen hook: ACTIVE (SSE2 replacement for sub_76EE30)");
+#else
+    bool strlen76Ok = false;
+    Log("WoW-internal strlen hook: DISABLED (sub_76EE30 unhooked for anti-cheat synchronization and thread safety)");
+#endif
 
     // CRT strstr SSE2 - algorithmic replacement for byte-by-byte search
 #if !TEST_DISABLE_STRSTR_SSE2
@@ -8529,7 +8558,14 @@ static DWORD WINAPI MainThread(LPVOID param) {
     bool luaGlobalCacheOk = Config::g_settings.OptLuaOpcache && Config::g_settings.OptLuaOpcacheTables && InstallLuaGlobalCache();
 
     // memset hook - 1108 callers
-    bool hotFuncOk = Config::g_settings.OptFastMemsetOpt && InstallHotFunctionOptimizations();
+    bool hotFuncOk = false;
+    if (Config::g_settings.OptFastMemsetOpt) {
+        if (Config::g_settings.OptServerSyncCompat) {
+            Log("[HotFunc] FastMemsetOpt stands aside: ServerSyncCompat is active (CRT memset cannot be safely hot-swapped across threads)");
+        } else {
+            hotFuncOk = InstallHotFunctionOptimizations();
+        }
+    }
 
     // FastMemcpy stays off. Commit 6d71ec19 disabled it "to prevent
     // uninitialized object corruptions and crashes in combat", and the reason is
@@ -8763,6 +8799,7 @@ static DWORD WINAPI MainThread(LPVOID param) {
     AsyncPollSpin::Init();
     LuaCollectSkip::Init();
     FastExit::Init();
+    LoadingFrameCap::Init();
     TimerCalibration::Init();
     ClientCodeAudit::Init();
     FileAttrCensus::Init();
@@ -9956,6 +9993,12 @@ static DWORD WINAPI MainThread(LPVOID param) {
     // The queue is now empty and no other install is using it. Anything
     // installing from here on may batch for itself.
     g_hookBatchSettled = 1;
+#endif
+
+#if HAVE_SERVER_SYNC_COMPAT
+    if (Config::g_settings.OptServerSyncCompat) {
+        ServerSyncCompat::CapturePatchedBytes();
+    }
 #endif
 
     Log("");

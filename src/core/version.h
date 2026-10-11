@@ -1,7 +1,7 @@
 #pragma once
 
 #define WOW_OPTIMIZE_VERSION_MAJOR  3
-#define WOW_OPTIMIZE_VERSION_MINOR  22
+#define WOW_OPTIMIZE_VERSION_MINOR  23
 #define WOW_OPTIMIZE_VERSION_PATCH  0
 #define WOW_OPTIMIZE_VERSION_BUILD  0
 
@@ -945,6 +945,7 @@ extern "C" void WowOpt_RecordHookOwner(uintptr_t target, const void* detour);
 // Records a detour's address with the sampling profiler under a name made from
 // the function it hooks. Cheap and silent; safe before the profiler has started.
 extern "C" void WowOpt_NoteDetour(uintptr_t target, const void* detour);
+extern "C" void WowOpt_RegisterServerSyncHook(uintptr_t target, const void* detour);
 
 static inline MH_STATUS WowOpt_CreateHookGuarded(void* target, void* detour, void** original) {
 #if ALLOW_WOW_INTERNAL_HOOKS_ON_WINE == 0
@@ -1051,6 +1052,7 @@ static inline MH_STATUS WowOpt_CreateHookGuarded(void* target, void* detour, voi
     if (st == MH_OK) {
         WowOpt_NoteDetour((uintptr_t)target, detour);
         WowOpt_RecordHookOwner((uintptr_t)target, detour);
+        WowOpt_RegisterServerSyncHook((uintptr_t)target, detour);
     }
     return st;
 }
@@ -1083,6 +1085,25 @@ static inline MH_STATUS WowOpt_CreateHookOverForeign(void* target, void* detour,
     if (st == MH_OK) {
         WowOpt_NoteDetour((uintptr_t)target, detour);
         WowOpt_RecordHookOwner((uintptr_t)target, detour);
+        WowOpt_RegisterServerSyncHook((uintptr_t)target, detour);
+    }
+    return st;
+}
+
+// The other exception, for one target inside the client's image whose leading jmp rel32 is another
+// patch's and whose detour only observes: it reads an argument and calls the original, so it can
+// sit in front of that jump with the other patch still running behind it. The guard above declines
+// every such target because most detours replace what a function does. A module that has decided
+// it is the observing kind says so by calling this, after checking that the byte is an E9 and not
+// something else. No Client Patches and a translation layer still decline.
+static inline MH_STATUS WowOpt_CreateHookInFrontOfJump(void* target, void* detour, void** original) {
+    if (IsRosetta()) return MH_ERROR_UNSUPPORTED_FUNCTION;
+    if (!WowOpt_ClientPatchAllowed(target)) return MH_ERROR_UNSUPPORTED_FUNCTION;
+    MH_STATUS st = MH_CreateHook(target, detour, original);   // still MinHook's own entry here
+    if (st == MH_OK) {
+        WowOpt_NoteDetour((uintptr_t)target, detour);
+        WowOpt_RecordHookOwner((uintptr_t)target, detour);
+        WowOpt_RegisterServerSyncHook((uintptr_t)target, detour);
     }
     return st;
 }

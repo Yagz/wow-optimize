@@ -518,10 +518,17 @@ bool Init() {
             "hooking in front of it.", ADDR_FrameScript_SignalEvent, (unsigned)target);
     }
 
-    if (WineSafe_CreateHook((void*)ADDR_FrameScript_SignalEvent,
-                            (void*)Hooked_FrameScript_SignalEvent,
-                            &g_origSignalEvent) != MH_OK) {
-        Log("[LoadingState] Failed to hook FrameScript_SignalEvent");
+    // WineSafe_CreateHook declines any target that starts with a jump, which is what made the
+    // "hooking in front of it" above a log line only: the Rebuffed client's own module sits at this
+    // entry, and every one of its sessions logged "Failed to hook" right after it. The jump case
+    // goes through the call that exists for an observing detour in front of a foreign jump.
+    const MH_STATUS created = jumped
+        ? WowOpt_CreateHookInFrontOfJump((void*)ADDR_FrameScript_SignalEvent,
+                                         (void*)Hooked_FrameScript_SignalEvent, &g_origSignalEvent)
+        : WineSafe_CreateHook((void*)ADDR_FrameScript_SignalEvent,
+                              (void*)Hooked_FrameScript_SignalEvent, &g_origSignalEvent);
+    if (created != MH_OK) {
+        Log("[LoadingState] Failed to hook FrameScript_SignalEvent (MinHook status %d)", (int)created);
         return false;
     }
 

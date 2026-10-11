@@ -42,6 +42,7 @@ static const BoolSetting kBoolSettings[] = {
     { "General", "FastTimerCalibration", &Settings::OptFastTimerCalibration },
     { "General", "FastNetworkInit", &Settings::OptFastNetworkInit },
     { "General", "ExtraReaderThread", &Settings::OptExtraReaderThread },
+    { "General", "LoadingFrameCap", &Settings::OptLoadingFrameCap },
     { "General", "NoWebProxy", &Settings::OptNoWebProxy },
     { "General", "ClientCodeAudit", &Settings::OptClientCodeAudit },
     { "General", "FileAttrCensus", &Settings::OptFileAttrCensus },
@@ -274,6 +275,7 @@ static const BoolSetting kBoolSettings[] = {
     { "Graphics_Sound", "CollisionSweptLeaf", &Settings::OptCollisionSweptLeaf },
     { "Graphics_Sound", "CollisionSegmentBsp", &Settings::OptCollisionSegmentBsp },
     { "Graphics_Sound", "CollisionSegmentLeaf", &Settings::OptCollisionSegmentLeaf },
+    { "General", "ServerSyncCompat", &Settings::OptServerSyncCompat },
 };
 
 static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolSettings[0]));
@@ -329,6 +331,8 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         Log("[Config]   [General] CameraReplayKey=0x%02X", g_settings.CameraReplayKey);
         Log("[Config]   [General] AbTestSubject='%s' every %d ms",
             g_settings.AbTestSubject, g_settings.AbTestPeriodMs);
+        Log("[Config]   [General] LogFolder='%s'%s", g_settings.LogFolder,
+            g_settings.LogFolder[0] ? "" : "   (default - Logs\\ and Crashes\\ beside the game)");
         Log("[Config]   [General] SessionLogsToKeep=%d", g_settings.SessionLogsToKeep);
         Log("[Config]   [General] HighPlacementMinKB=%d", g_settings.HighPlacementMinKB);
         Log("[Config] %d set in the file, %d left at defaults.", fromFile, defaulted);
@@ -613,6 +617,7 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         g_settings.OptFastTimerCalibration = GetPrivateProfileIntA("General", "FastTimerCalibration", 0, iniPath.c_str()) != 0;
         g_settings.OptFastNetworkInit     = GetPrivateProfileIntA("General", "FastNetworkInit", 0, iniPath.c_str()) != 0;
         g_settings.OptExtraReaderThread   = GetPrivateProfileIntA("General", "ExtraReaderThread", 0, iniPath.c_str()) != 0;
+        g_settings.OptLoadingFrameCap     = GetPrivateProfileIntA("General", "LoadingFrameCap", 0, iniPath.c_str()) != 0;
         g_settings.OptNoWebProxy          = GetPrivateProfileIntA("General", "NoWebProxy", 0, iniPath.c_str()) != 0;
         g_settings.OptClientCodeAudit     = GetPrivateProfileIntA("General", "ClientCodeAudit", 1, iniPath.c_str()) != 0;
         g_settings.OptFileAttrCensus      = GetPrivateProfileIntA("General", "FileAttrCensus", 1, iniPath.c_str()) != 0;
@@ -659,6 +664,17 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         GetPrivateProfileStringA("General", "AbTestSubject", "",
                                  g_settings.AbTestSubject,
                                  sizeof(g_settings.AbTestSubject), iniPath.c_str());
+        GetPrivateProfileStringA("General", "LogFolder", "",
+                                 g_settings.LogFolder,
+                                 sizeof(g_settings.LogFolder), iniPath.c_str());
+        {
+            // So "<folder>\wow_optimize.log" never doubles the separator - the
+            // launcher's folder browser never leaves one, but a hand-edited ini
+            // can.
+            size_t len = strlen(g_settings.LogFolder);
+            while (len > 0 && (g_settings.LogFolder[len - 1] == '\\' || g_settings.LogFolder[len - 1] == '/'))
+                g_settings.LogFolder[--len] = '\0';
+        }
         // 0x91 is Scroll Lock. The client binds no action to it, and a key
         // works on a loading screen and at character select, where no addon is
         // running and where two of the open defects appear.
@@ -717,7 +733,7 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         g_settings.OptNameplateMT         = GetPrivateProfileIntA("Combat_Net", "NameplateMT", 0, iniPath.c_str()) != 0;
 
         // Graphics & Sound
-        g_settings.OptFastMemsetOpt       = GetPrivateProfileIntA("Graphics_Sound", "FastMemsetOpt", 1, iniPath.c_str()) != 0;
+        g_settings.OptFastMemsetOpt       = GetPrivateProfileIntA("Graphics_Sound", "FastMemsetOpt", 0, iniPath.c_str()) != 0;
         g_settings.OptFastStrnicmpOpt     = GetPrivateProfileIntA("UI_Lua", "FastStrnicmpOpt", 1, iniPath.c_str()) != 0;
         g_settings.OptLuaSNewLstrFast     = GetPrivateProfileIntA("UI_Lua", "LuaSNewLstrFast", 0, iniPath.c_str()) != 0;
         g_settings.OptStrStrSse2          = GetPrivateProfileIntA("Graphics_Sound", "StrStrSse2", 0, iniPath.c_str()) != 0;
@@ -927,6 +943,7 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         g_settings.OptCollisionSweptLeaf    = GetPrivateProfileIntA("Graphics_Sound", "CollisionSweptLeaf", 0, iniPath.c_str()) != 0;
         g_settings.OptCollisionSegmentBsp  = GetPrivateProfileIntA("Graphics_Sound", "CollisionSegmentBsp", 0, iniPath.c_str()) != 0;
         g_settings.OptCollisionSegmentLeaf = GetPrivateProfileIntA("Graphics_Sound", "CollisionSegmentLeaf", 0, iniPath.c_str()) != 0;
+        g_settings.OptServerSyncCompat     = GetPrivateProfileIntA("General", "ServerSyncCompat", 0, iniPath.c_str()) != 0;
     }
 }
 
@@ -934,3 +951,48 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
 // config.h. It reads these two settings through here instead.
 extern "C" bool WowOpt_LuaVmOptEnabled()    { return Config::g_settings.OptLuaVmOpt; }
 extern "C" bool WowOpt_LuaGcManualEnabled() { return Config::g_settings.OptLuaGcManual; }
+
+namespace Config {
+
+// CreateDirectoryA makes one level; a folder picked from the browser can be several
+// levels below anything that already exists ("D:\New\Sub\Deep"). Walks the string in
+// place, creating each prefix up to every backslash. An already-existing segment is
+// ERROR_ALREADY_EXISTS, which this does not check for - a directory call that fails
+// because it is already there and one that fails for any other reason are both
+// followed by the same next CreateDirectoryA, and the one that matters is the last.
+static void EnsureDirectoryTree(char* path) {
+    for (char* p = path + 1; *p; ++p) {
+        if (*p == '\\' || *p == '/') {
+            const char saved = *p;
+            *p = '\0';
+            CreateDirectoryA(path, NULL);
+            *p = saved;
+        }
+    }
+    CreateDirectoryA(path, NULL);
+}
+
+const char* LogDir() {
+    static char dir[260] = {};
+    if (g_settings.LogFolder[0]) {
+        lstrcpynA(dir, g_settings.LogFolder, sizeof(dir));
+    } else {
+        lstrcpynA(dir, "Logs", sizeof(dir));
+    }
+    EnsureDirectoryTree(dir);
+    return dir;
+}
+
+const char* CrashDir() {
+    static char dir[260] = {};
+    if (g_settings.LogFolder[0]) {
+        _snprintf(dir, sizeof(dir), "%s\\Crashes", g_settings.LogFolder);
+        dir[sizeof(dir) - 1] = '\0';
+    } else {
+        lstrcpynA(dir, "Crashes", sizeof(dir));
+    }
+    EnsureDirectoryTree(dir);
+    return dir;
+}
+
+}  // namespace Config

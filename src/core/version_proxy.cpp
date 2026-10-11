@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 // Real version.dll function pointers
 static HMODULE g_realVersionDll = nullptr;
@@ -87,6 +88,13 @@ static bool LoadRealVersionDll() {
 //
 // Raw Win32 rather than the CRT, so the attach line can be written from inside
 // DllMain while the loader lock is held.
+//
+// Forward-declared: General/LogFolder in wow_opt.ini, read the same way
+// ApplyFastTimerCalibration and ApplyFastNetworkInit read their own switches a
+// few lines below in DllMain - this runs first, so it is the first thing in
+// this file to touch the ini. ProxyFindIni is defined further down.
+static bool ProxyFindIni(char* out, size_t cap);
+
 static void ProxyLogPath(HMODULE hSelf, char* out, size_t cap) {
     out[0] = '\0';
 
@@ -98,11 +106,23 @@ static void ProxyLogPath(HMODULE hSelf, char* out, size_t cap) {
     if (!lastSlash) return;
     *(lastSlash + 1) = '\0';
 
-    const size_t tail = sizeof("Logs\\wow_optimize_proxy.log");
-    size_t base = strlen(dir);
-    if (base + tail > cap || base + tail > MAX_PATH) return;
+    char logFolder[MAX_PATH] = {};
+    char ini[MAX_PATH];
+    if (ProxyFindIni(ini, sizeof(ini))) {
+        GetPrivateProfileStringA("General", "LogFolder", "", logFolder, sizeof(logFolder), ini);
+        size_t lfLen = strlen(logFolder);
+        while (lfLen > 0 && (logFolder[lfLen - 1] == '\\' || logFolder[lfLen - 1] == '/'))
+            logFolder[--lfLen] = '\0';
+    }
 
-    strcat_s(dir, MAX_PATH, "Logs");
+    if (logFolder[0]) {
+        strcpy_s(dir, MAX_PATH, logFolder);
+    } else {
+        const size_t tail = sizeof("Logs\\wow_optimize_proxy.log");
+        size_t base = strlen(dir);
+        if (base + tail > cap || base + tail > MAX_PATH) return;
+        strcat_s(dir, MAX_PATH, "Logs");
+    }
     CreateDirectoryA(dir, NULL);
 
     strcpy_s(out, cap, dir);

@@ -44,6 +44,7 @@ namespace Config {
         bool OptFastTimerCalibration = false;
         bool OptFastNetworkInit = false;
         bool OptExtraReaderThread = false;
+        bool OptLoadingFrameCap = false;
         bool OptNoWebProxy = false;
         bool OptClientCodeAudit = true;
         bool OptFileAttrCensus = true;
@@ -169,6 +170,14 @@ namespace Config {
         int  AbTestPeriodMs = 20000;
         char AbTestSubject[32] = {};
 
+        // A folder for wow_optimize.log, the timestamped session logs and the crash
+        // dumps, instead of Logs\ and Crashes\ beside the game. Empty (the default)
+        // keeps that layout exactly. Set, logs go straight into it and dumps go into
+        // a Crashes\ folder created inside it - LogDir() and CrashDir() below are
+        // what every log- and dump-opening site should call instead of the literal
+        // "Logs" or "Crashes" this replaces. No trailing separator; Load() trims one.
+        char LogFolder[260] = {};
+
         // UI & Lua
         bool OptUIFrameBatch = false;
         bool OptAddonDispatcher = false;
@@ -248,7 +257,7 @@ namespace Config {
         // Both of these had a launcher switch whose ini key nothing read, so the
         // hooks installed regardless and a tester bisecting string corruption got
         // no signal from turning them off.
-        bool OptFastMemsetOpt = true;    // SSE2 memset replacement (0x0040BB80)
+        bool OptFastMemsetOpt = false;   // SSE2 memset replacement (0x0040BB80)
         bool OptFastStrnicmpOpt = true;  // SSE2 _strnicmp replacement (0x0076E780)
         bool OptLuaSNewLstrFast = false;
         bool OptStrStrSse2 = false;
@@ -740,6 +749,7 @@ namespace Config {
         bool OptCollisionSweptLeaf = false;
         bool OptCollisionSegmentBsp = false;
         bool OptCollisionSegmentLeaf = false;
+        bool OptServerSyncCompat = false;
     };
 
     extern Settings g_settings;
@@ -750,6 +760,16 @@ namespace Config {
     // Writes the resolved ini path and its contents to the log. Call after Load
     // and after logging is up, so every report says what was actually enabled.
     void DumpToLog();
+
+    // The folder wow_optimize.log, the timestamped session logs and
+    // PruneSessionLogs all write to: g_settings.LogFolder if set, else "Logs"
+    // exactly as every build before this one. Created if it does not exist
+    // (every missing level of it, not just the last). No trailing separator.
+    const char* LogDir();
+    // g_settings.LogFolder with "\\Crashes" appended if set, else "Crashes" -
+    // a sibling of Logs\, not nested inside it, exactly as every build before
+    // this one. Created if it does not exist.
+    const char* CrashDir();
 }
 
 #endif // WOW_OPT_CONFIG_H

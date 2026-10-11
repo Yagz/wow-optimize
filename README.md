@@ -3,11 +3,6 @@
 > memory optimization tools as illegal software regardless of intent, and the
 > result is a permanent ban on your account.
 
-> [!WARNING]
-> **On WoW Circle the DLL gets you disconnected** - Turning on **No Client Patches** in the launcher stops it, and
-> also turns every optimization off.   
-Or use the `!LuaBoost` addon without the DLL.
-
 # wow_optimize
 
 Performance optimization DLL for World of Warcraft 3.3.5a (WotLK)
@@ -24,7 +19,7 @@ The current public build is focused on real frametime stability, long-session sm
 ---
 
 ## Table of Contents
-* [What's New in v3.22.0](#whats-new-in-v3220)
+* [What's New in v3.23.0](#whats-new-in-v3230)
 * [Send me your log](#send-me-your-log)
   * [Measuring rather than reporting](#if-you-want-to-measure-something-rather-than-report-a-bug)
 * [Reviews & Acknowledgments](#reviews)
@@ -39,64 +34,40 @@ The current public build is focused on real frametime stability, long-session sm
 
 ---
 
-## What's New in v3.22.0
+## What's New in v3.23.0
 
-### Fixed
+### Server Compatibility
 
-* **A crash when an addon set builds a lot of UI layers.** The *UI Strata List
-  Compaction (SSE2)* replacement (on by default) wrote past the end of a 128-entry table
-  once one layer had more than 128 levels, which large addon sets reach. The
-  crash showed when an addon was enabled in AddonControlPanel and when an ICC
-  satchel was opened. A layer with more levels than the table holds is now
-  compacted by the game's own routine. Reported by Drain.
-* **The Lich King movie crash.** In several sessions the game ended inside the
-  Windows heap manager at the Fall of the Lich King movie. The cause is not
-  settled. The first run with *Large Reservations Above 2GB: Heap Growth* off
-  played the movie without it, and the switch exists so that run can be
-  repeated. It is on by default, as before. The report now sorts the reservations
-  Windows makes for itself by what they ask for, so the next log can tell heap
-  segments from large blocks. Reported by Drain and prince.
-* **Reports that overstated.** Three replacements printed a speed-up of exactly
-  2.00x that was the game's own time halved, and one verdict warned about faults
-  that this tool's own addon sampler raises on purpose. Both are corrected.
-* **Thread sampling stays off under Wine and Rosetta.** The watchdog samples the
-  game's worker threads during a loading screen by suspending them one at a
-  time. Under a translation layer it samples the main thread only.
+* **WoW Circle Integrity Synchronization (`ServerSyncCompat`).**
+  Players on WoW Circle can now run the optimizer with all performance improvements active
+  without being disconnected or kicked.
+  * **How to use:** Enable **ServerSyncCompat** in the launcher dashboard (or set
+    `ServerSyncCompat=1` in `WTF\wow_opt.ini` under `[General]`).
 
-### New (experimental, off by default)
+### Performance & Loading Screens
 
-* **Faster Loading Screens (File Reader Polling).** The game's file reader
-  polls with a one millisecond sleep on both sides of every request, and in
-  logged loading screens most of the main thread's time is that sleep. This
-  waits a few tens of microseconds by spinning instead, for those loops only.
-* **Skip Addon Garbage Collection During Loading.** An addon's
-  `collectgarbage("collect")` during a loading screen returns at once while the
-  scripting heap is under 600 MB. The game's normal incremental collection keeps
-  running. The log counts every explicit collection and names the addon.
-* **Addon Memory Figures Walk.** The per-addon memory totals the game rebuilds
-  by walking a list are found from a cache.
-* **Particle Quad Fill** now covers emitters with a second quad and the quad that
-  faces along the particle's velocity, and checks the track evaluator against the
-  game's own on every particle it answers. The two new quad paths were compared
-  with the game's instructions over 1.4 billion generated cases and have not been
-  run in a game.
-* **Low-Fragmentation Heap** has a switch (on, as before) so that an allocator
-  crash can be ruled in or out.
+* **Faster Loading Screens (File Reader Polling Spin).** `AsyncPollSpin` (off by default)
+  replaces the file reader's 1 ms sleep polling with microsecond spin-waits inside loading
+  screens.
+* **Secondary asynchronous reader thread.** `AsyncSecondaryReader` (off by default)
+  spawns a second worker on the client's asynchronous file queue for faster asset streaming.
+* **Startup & loading time reductions.** Cut the 100 ms network start sleep, skipped
+  the client's frame limiter sleep during loading screens, and shortened the 250 ms startup
+  clock check.
 
-### Reports
+### Launcher Quality of Life
 
-* **Who puts the main thread to sleep.** The log counts the game's Sleep calls
-  per caller and per loading screen.
-* **A crash inside the Windows heap names the heap and lists its segments.**
-* **The A/B report gives a standard error** from neighbouring stints paired, and
-  says when the censuses that were switched on bias the bundle.
-* **First-chance faults are split** into those raised inside this DLL and those
-  raised elsewhere.
+* **Settings auto-save.** Changes to checkboxes in the launcher dashboard now auto-save
+  immediately and upon closing the application.
+* **Configurable logs and crash dumps directory.** Users can now specify a custom output
+  folder for logs and crash dumps instead of the fixed `Logs\` and `Crashes\` folders.
+* **Improved search and tabs.** Retains caret focus in the launcher search box and finds
+  pasted feature names across tabs.
 
 ### After updating
 
-Nothing to do. Press DEFAULT in the launcher once if you want the new defaults
-written into your profile.
+Press **DEFAULT** in the launcher once if you want the new defaults written into your profile.
+If playing on WoW Circle, ensure **ServerSyncCompat** is turned on.
 
 ---
 
@@ -197,7 +168,8 @@ See what other players say: [Reviews and Testimonials](https://github.com/suprep
 This project wouldn't exist without the community. Every crash report, every bisection test, every "hey this broke my addon" message directly shaped the release. 
 
 Special thanks to:
-Morbent, Darkmoore, Ethodeus, Billy Hoyle, tuan, NoGoodLife, feh_dois, David (`_oldq`), Keoo, UNOB, DarkRockDemon, Raymond, Vandal, Mantork, Falcon, Muus, szopachink17, Shandrax, pathetic-lynx, txtsd, Signalborn Soulweaver, Sicsoo, kojekude, Houmbro, Feles Noctis, kromvel85
+Morbent, Darkmoore, Ethodeus, Billy Hoyle, tuan, NoGoodLife, feh_dois, David (`_oldq`), Keoo, UNOB, DarkRockDemon, Raymond, Vandal, Mantork, Falcon, Muus, szopachink17, Shandrax, pathetic-lynx, txtsd, Signalborn Soulweaver, Sicsoo, kojekude, Houmbro, Feles Noctis, kromvel85, vabulletizer, [sp0rt99](https://github.com/sarych3vlad), snippi, bezdomen, Hanselgretel, lilserega
+
 
 ### Code contributions
 
@@ -223,9 +195,7 @@ Every measured item in these notes came out of a log somebody sent in.
 - **[txtsd](https://github.com/txtsd)** — raids on ChromieCraft; the memory growth
   and freeze reports, and the request for per-addon profiling that turned into the
   addon CPU profiler and the Lua compile census.
-- **kromvel85** (Roman) — WoW Circle with No Client Patches on: hour-long sessions
-  in Dalaran with no crash, the first log from a server that removes players for
-  patching the client, and the report that one core sat near full load there.
+- **kromvel85** (Roman) 
 - **Signalborn Soulweaver**, **Morbent**, **Sicsoo** — early 3.18 logs.
 - **Doc.James** — the zone-change stall, with three sessions that made it
   reproducible.
@@ -242,6 +212,7 @@ Every measured item in these notes came out of a log somebody sent in.
   with the lines of its router that produced it. That was enough to trace it
   to this tool's `math.random` returning exactly 1.0, and from there to the
   unseeded generator behind it.
+- **vabulletizer**, **[sp0rt99](https://github.com/sarych3vlad)**, **bezdomen**, **Hanselgretel**, **lilserega** — stability testing, crash reports and logs (WoW Circle, server packet synchronization compatibility).
 
 </details>
 
@@ -517,9 +488,7 @@ The optimization suite is compatible with any standard or customized WotLK 3.3.5
 * **Warmane** (Icecrown, Lordaeron, Onyxia) — **STRICTLY PROHIBITED (WILL RESULT IN A PERMANENT BAN)**
 * **Project Ascension** (supporting custom `Ascension.exe` launches)
 * **Arden WoW** (supporting `Arden.exe` and `ArdenWoW.exe` launches). The client carries its own `Extensions.dll`, which already patches a few of the same client functions, so the matching optimizations here stand aside and the log lists them.
-* **WoW Circle** - **On WoW Circle the DLL gets you disconnected** - Turning on **No Client Patches** in the launcher stops it, and
-also turns every optimization off.   
-Or use the `!LuaBoost` addon without the DLL.
+* **WoW Circle** — **Fully supported with optimizations enabled.** Turn on **ServerSyncCompat** in the launcher dashboard (or set `ServerSyncCompat=1` in `WTF\wow_opt.ini` under `[General]`).
 * **EZ WoW**
 * **WoW Sirus** (supporting `Sirus.exe` or custom `run.exe` launches)
 * **UWow** / **Firestorm** (supporting `run.exe` launches)
