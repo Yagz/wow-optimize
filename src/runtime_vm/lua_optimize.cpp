@@ -172,6 +172,9 @@ static int g_lastSyncNormal = -1;
 static int g_lastSyncCombat = -1;
 static int g_lastSyncIdle = -1;
 static int g_lastSyncLoading = -1;
+// What LUABOOST_DLL_GC_ACTIVE was last set to on the current state, or -1 when it
+// has not been written since the state changed. See PublishGcActive.
+static int g_publishedGcActive = -1;
 static DWORD g_lastLuaSwapTick = 0;
 static lua_State* g_pendingLuaState = nullptr;
 static DWORD g_pendingLuaStateTick = 0;
@@ -1176,6 +1179,24 @@ static void TryTrimForLoadingScreen(lua_State* L) {
     }
 }
 
+// LUABOOST_DLL_GC_ACTIVE is what the addon uses to decide whether it has to step
+// the collector itself. The addon stops the VM's automatic collector and, once it
+// has seen this module, leaves the stepping to it. A setup that did not take, or a
+// step that threw and cleared gcOptimized, then left a collector that was stopped
+// with nothing stepping it. The periodic stats write that used to carry this value
+// runs only while gcOptimized is set, so it could never report the false case; this
+// writes it on change, from the tick that also decides whether to step.
+static void PublishGcActive(lua_State* L) {
+    const int want = State.gcOptimized ? 1 : 0;
+    if (want == g_publishedGcActive) return;
+    if (!L || !Api.lua_pushboolean || !Api.lua_setfield) return;
+    __try {
+        WriteLuaGlobal_Bool(L, "LUABOOST_DLL_GC_ACTIVE", want != 0);
+        g_publishedGcActive = want;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+}
+
 // ================================================================
 //  Addon State Reader - reads globals set by !LuaBoost addon
 // ================================================================
@@ -1380,49 +1401,6 @@ static void UpdateLuaStats(lua_State* L) {
     Api.lua_settop(L, topBefore);
 }
 
-// C callback stubs for LuaBoost functions (used when FrameScript_Execute fails)
-static int __cdecl LuaBoostC_IsLoaded_cb(lua_State* L) {
-    Api.lua_pushboolean(L, 1);
-    return 1;
-}
-
-static int __cdecl LuaBoostC_GetStats_cb(lua_State* L) {
-    if (!Api.lua_pushnumber || !Api.lua_pushboolean || !Api.lua_pushstring) return 0;
-    Api.lua_pushnumber(L, State.luaMemoryKB);
-    Api.lua_pushnumber(L, (lua_Number)State.gcStepsTotal);
-    Api.lua_pushnumber(L, (lua_Number)State.fullCollects);
-    Api.lua_pushnumber(L, (lua_Number)Config.gcPause);
-    Api.lua_pushnumber(L, (lua_Number)Config.gcStepMul);
-    Api.lua_pushboolean(L, Config.inCombat ? 1 : 0);
-    Api.lua_pushstring(L, GetGCModeName());
-    Api.lua_pushboolean(L, Config.isIdle ? 1 : 0);
-    Api.lua_pushboolean(L, Config.isLoading ? 1 : 0);
-    Api.lua_pushboolean(L, g_luaAllocReplaced ? 1 : 0);
-    return 10;
-}
-
-static int __cdecl LuaBoostC_GCMemory_cb(lua_State* L) {
-    if (!Api.lua_pushnumber) return 0;
-    Api.lua_pushnumber(L, State.luaMemoryKB);
-    return 1;
-}
-
-static int __cdecl LuaBoostC_SetCombat_cb(lua_State* L) {
-    if (!Api.lua_toboolean) return 0;
-    Config.inCombat = Api.lua_toboolean(L, 1) ? true : false;
-    return 0;
-}
-
-static int __cdecl LuaBoostC_GCStep_cb(lua_State* L) {
-    // Stub - just accept the call
-    return 0;
-}
-
-static int __cdecl LuaBoostC_GCCollect_cb(lua_State* L) {
-    // Stub - just accept the call
-    return 0;
-}
-
 // Metatable __index stub for GMChatFrame.lastGM.
 // Returns "" for all keys, preventing nil-concatenation crash at UIParent.lua:476.
 static int __cdecl gm_index_stub(lua_State* L) {
@@ -1431,34 +1409,6 @@ static int __cdecl gm_index_stub(lua_State* L) {
         return 1;
     }
     return 0;
-}
-
-static int __cdecl LuaBoostC_GetUIStats_cb(lua_State* L) {
-    if (!Api.lua_pushnumber || !Api.lua_pushboolean) return 0;
-    UICache::Stats s = UICache::GetStats();
-    Api.lua_pushnumber(L, (lua_Number)s.skipped);
-    Api.lua_pushnumber(L, (lua_Number)s.passed);
-    Api.lua_pushboolean(L, s.active ? 1 : 0);
-    return 3;
-}
-
-static int __cdecl LuaBoostC_GetApiStats_cb(lua_State* L) {
-    if (!Api.lua_pushnumber || !Api.lua_pushboolean) return 0;
-    ApiCache::Stats s = ApiCache::GetStats();
-    Api.lua_pushnumber(L, (lua_Number)s.itemHits);
-    Api.lua_pushnumber(L, (lua_Number)s.itemMisses);
-    Api.lua_pushnumber(L, (lua_Number)s.itemBypassed);
-    Api.lua_pushboolean(L, s.active ? 1 : 0);
-    return 4;
-}
-
-static int __cdecl LuaBoostC_GetFastPathStats_cb(lua_State* L) {
-    if (!Api.lua_pushnumber || !Api.lua_pushboolean) return 0;
-    LuaFastPath::Stats s = LuaFastPath::GetStats();
-    Api.lua_pushnumber(L, (lua_Number)s.formatFastHits);
-    Api.lua_pushnumber(L, (lua_Number)s.formatFallbacks);
-    Api.lua_pushboolean(L, s.active ? 1 : 0);
-    return 3;
 }
 
 static void RegisterLuaFunction(lua_State* L, const char* name, void* fn) {
@@ -1486,7 +1436,7 @@ static void SetupLuaInterface(lua_State* L) {
     // WoW 3.3.5a may use a different internal lua_State for addon execution
     // than the one at 0x00D3F78C. FrameScript_Execute writes to WoW's actual
     // addon state, ensuring addons can see our markers.
-    if (!Api.lua_pushboolean || !Api.lua_setfield || !Api.lua_pushcclosure) {
+    if (!Api.lua_pushboolean || !Api.lua_setfield) {
         Log("[LuaOpt] SetupLuaInterface: missing C API functions");
         return;
     }
@@ -1511,37 +1461,34 @@ static void SetupLuaInterface(lua_State* L) {
         WriteLuaGlobal_Bool(L, "LUABOOST_ADDON_IDLE", false);
         WriteLuaGlobal_Bool(L, "LUABOOST_ADDON_LOADING", false);
 
-        // Also inject via FrameScript_Execute for addon-side visibility
+        // Also inject via FrameScript_Execute for addon-side visibility. The
+        // values are the live ones: the addon reads LUABOOST_DLL_GC_ACTIVE to
+        // decide whether it has to step the collector itself, so a constant
+        // true here would hide a GC setup that did not take.
         if (Api.FrameScript_Execute) {
+            char inject[128];
+            snprintf(inject, sizeof(inject),
+                     "LUABOOST_DLL_LOADED=true "
+                     "LUABOOST_DLL_GC_ACTIVE=%s "
+                     "LUABOOST_DLL_LUA_ALLOC=%s",
+                     State.gcOptimized ? "true" : "false",
+                     g_luaAllocReplaced ? "true" : "false");
             __try {
-                Api.FrameScript_Execute(
-                    "LUABOOST_DLL_LOADED=true "
-                    "LUABOOST_DLL_GC_ACTIVE=true "
-                    "LUABOOST_DLL_LUA_ALLOC=true",
-                    "wow_optimize_inject", 0);
+                Api.FrameScript_Execute(inject, "wow_optimize_inject", 0);
                 Log("[LuaOpt] SetupLuaInterface: injected markers via FrameScript_Execute");
             } __except(EXCEPTION_EXECUTE_HANDLER) {
                 Log("[LuaOpt] SetupLuaInterface: FrameScript injection failed");
             }
         }
-        
-        // Register C functions (SKIPPED to bypass WoW function pointer whitelist integrity checks)
-        /*
-        RegisterLuaFunction(L, "LuaBoostC_IsLoaded", (void*)LuaBoostC_IsLoaded_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GetStats", (void*)LuaBoostC_GetStats_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GCMemory", (void*)LuaBoostC_GCMemory_cb);
-        RegisterLuaFunction(L, "LuaBoostC_SetCombat", (void*)LuaBoostC_SetCombat_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GCStep", (void*)LuaBoostC_GCStep_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GCCollect", (void*)LuaBoostC_GCCollect_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GetUIStats", (void*)LuaBoostC_GetUIStats_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GetApiStats", (void*)LuaBoostC_GetApiStats_cb);
-        RegisterLuaFunction(L, "LuaBoostC_GetFastPathStats", (void*)LuaBoostC_GetFastPathStats_cb);
-        */
-        
-        LogEx(LOG_LEVEL_INFO, "LUA", "SetupLuaInterface: registered 6 globals on L=0x%08X", 
-            (unsigned)(uintptr_t)L);
+
+        // The LuaBoostC_* functions are not registered by this module. The
+        // addon installs its own Lua stubs under those names, and what it
+        // reads from the DLL is the LUABOOST_DLL_* globals written here and in
+        // ReadAddonStateFromLua's counterpart, UpdateLuaStats.
+        LogEx(LOG_LEVEL_INFO, "LUA", "SetupLuaInterface: markers written on L=0x%08X (GC setup %s)",
+            (unsigned)(uintptr_t)L, State.gcOptimized ? "in effect" : "not in effect");
     } __except(EXCEPTION_EXECUTE_HANDLER) {
-        LogEx(LOG_LEVEL_WARN, "LUA", "SetupLuaInterface: exception during registration");
+        LogEx(LOG_LEVEL_WARN, "LUA", "SetupLuaInterface: exception while writing markers");
     }
 }
 
@@ -1721,8 +1668,11 @@ static void __cdecl Hooked_FrameScript_Execute(const char* code, const char* sou
                 Api.lua_setfield(currentL, LUA_GLOBALSINDEX, "LUABOOST_LOADED");
                 Api.lua_pushboolean(currentL, 1);
                 Api.lua_setfield(currentL, LUA_GLOBALSINDEX, "LUABOOST_DLL_LOADED");
-                Api.lua_pushboolean(currentL, 1);
-                Api.lua_setfield(currentL, LUA_GLOBALSINDEX, "LUABOOST_DLL_GC_ACTIVE");
+                // LUABOOST_DLL_GC_ACTIVE is left unset here. The GC on this
+                // state is set up several ticks from now, and a constant in
+                // either direction would be a claim nothing has checked; the
+                // addon reads unset as "not reported", and PublishGcActive
+                // writes the real value when the swap completes.
                 if (Api.FrameScript_Execute) {
                     Api.FrameScript_Execute(
                         "local f=CreateFrame'Frame' "
@@ -2228,6 +2178,8 @@ void OnMainThreadSleep(DWORD mainThreadId, double frameMs) {
         g_lastSyncCombat = -1;
         g_lastSyncIdle = -1;
         g_lastSyncLoading = -1;
+        g_publishedGcActive = -1;
+        PublishGcActive(Api.L);
         g_lastLuaSwapTick = GetTickCount();
         g_smoothedGcMs = 0.5;
 
@@ -2237,6 +2189,7 @@ void OnMainThreadSleep(DWORD mainThreadId, double frameMs) {
         return;
     }
 
+    PublishGcActive(Api.L);
     if (!State.gcOptimized) return;
 
     bool slowFrame = (frameMs > 33.0);
@@ -2448,7 +2401,6 @@ Stats GetStats() {
     s.initialized         = State.initialized;
     s.gcOptimized         = State.gcOptimized;
     s.allocatorReplaced   = g_luaAllocReplaced;
-    s.functionsRegistered = true;
     s.luaMemoryKB         = State.luaMemoryKB;
     s.gcStepsTotal        = State.gcStepsTotal;
     s.gcPause             = Config.gcPause;

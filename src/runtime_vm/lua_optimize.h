@@ -22,7 +22,7 @@ namespace LuaOpt {
 bool PrepareFromWorkerThread();
 
 // Call from hooked_Sleep on main thread.
-// First call: initializes GC + registers functions.
+// First call: initializes GC and writes the LUABOOST_DLL_* markers.
 // Subsequent: incremental GC step.
 void OnMainThreadSleep(DWORD mainThreadId, double frameMs = 0.0);
 
@@ -38,7 +38,6 @@ struct Stats {
     bool   initialized;
     bool   gcOptimized;
     bool   allocatorReplaced;
-    bool   functionsRegistered;
     double luaMemoryKB;
     int    gcStepsTotal;
     int    gcPause;
