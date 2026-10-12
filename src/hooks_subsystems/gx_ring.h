@@ -117,9 +117,30 @@ extern volatile LONG g_dead;                        // render thread gone: every
 extern uint64_t g_ticksRingFull;                    // cycles the producer spent waiting, by cause
 extern unsigned long g_waitsRingFull;
 
+// The whole of RingReserve below, out of line: a command that wraps the ring or
+// finds the cached read cursor too close. Defined in gx_render_thread.cpp.
+uint8_t* RingReserveSlow(uint32_t n);
+
 // Space for `n` bytes at the write cursor, contiguous; publishes and waits if the
 // consumer is behind. `n` is a multiple of 8.
-inline uint8_t* RingReserve(uint32_t n) {
+//
+// Every queued call comes through here, about 1.4 billion times in a 28-minute raid
+// session, and MSVC declined to inline the full version: each command paid a call,
+// a frame and a return around three compares. The common case - room before the end
+// of the ring and before the cached read cursor - is inlined; anything else takes
+// the full routine, which re-derives everything from scratch.
+__forceinline uint8_t* RingReserve(uint32_t n) {
+    Ring& R = g_ring;
+    const uint32_t pos = R.wr & kRingMask;
+    if (pos + n <= kRingBytes && R.wr + n - R.rdCache <= kRingBytes) {
+        uint8_t* p = R.base + pos;
+        R.wr += n;
+        return p;
+    }
+    return RingReserveSlow(n);
+}
+
+inline uint8_t* RingReserveFull(uint32_t n) {
     Ring& R = g_ring;
     uint32_t pos = R.wr & kRingMask;
     uint32_t pad = 0;
@@ -151,7 +172,7 @@ inline uint8_t* RingReserve(uint32_t n) {
     return p;
 }
 
-template<class T> inline T* Emit(Op op) {
+template<class T> __forceinline T* Emit(Op op) {
     constexpr uint32_t n = (sizeof(T) + 7u) & ~7u;
     // Publish before reserving, never after: the caller fills the command in
     // once this returns, so a cursor published past it would show the consumer
@@ -164,7 +185,7 @@ template<class T> inline T* Emit(Op op) {
 }
 
 // A command followed by `extra` bytes of payload.
-template<class T> inline T* EmitVar(Op op, uint32_t extra) {
+template<class T> __forceinline T* EmitVar(Op op, uint32_t extra) {
     const uint32_t n = (sizeof(T) + extra + 7u) & ~7u;
     if (g_ring.unflushed >= kFlushEvery) g_ring.Flush();
     T* c = (T*)RingReserve(n);

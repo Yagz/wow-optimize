@@ -78,6 +78,10 @@ constexpr DWORD kDrainGiveUpMs = 3000;
 uint64_t    g_ticksRingFull = 0;
 unsigned long g_waitsRingFull = 0;
 
+__declspec(noinline) uint8_t* RingReserveSlow(uint32_t n) {
+    return RingReserveFull(n);
+}
+
 namespace {
 
 // ---- slots ------------------------------------------------------------------
