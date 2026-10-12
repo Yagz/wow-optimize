@@ -105,6 +105,7 @@ const unsigned char kClassClient     = 2;
 const unsigned char kClassOurs       = 3;
 const unsigned char kClassSystem     = 4;
 const unsigned char kClassOther      = 5;
+const unsigned char kClassKeptLow    = 6;   // a named module whose memory is never moved up
 
 // A slot names one module for the whole session, so counters and live entries
 // survive the module list being rebuilt. Slot 0 is "caller not found" and slot 1
@@ -158,6 +159,7 @@ ULONG g_reserveCalls = 0, g_reserveCallsEx = 0;
 ULONG g_attribWalk = 0, g_attribScan = 0, g_attribNone = 0;
 ULONG g_topDownAdded = 0, g_topDownHigh = 0, g_topDownLow = 0, g_topDownRetried = 0;
 ULONG g_heapGrowthLeft = 0;                   // reservations made by ntdll itself that were not moved
+ULONG g_keptLow = 0;                          // would have been placed, but the caller is a kept-low module
 // Every reservation of the minimum size made from inside ntdll, moved or not, by what it asked for
 // (reserve alone, commit alone, both) and by size (under 2 MB, 2 to under 16 MB, 16 MB and over).
 // A heap growing by a segment and a heap handing out a large block would show up as different
@@ -180,10 +182,24 @@ bool IsSystemModuleName(const char* name) {
     return false;
 }
 
+// Modules whose reservations stay where Windows puts them, whatever the switches
+// say. DivxDecoder.dll is the client's movie decoder, 2008 code, and it keeps a
+// private heap of one 60 KB segment. The Lich King kill movie grows that heap,
+// the second segment was placed above 2GB, and the next HeapAlloc on it faults
+// inside ntdll reading [esi+14h] with ESI zero. Nine crashes on two realms, every
+// one with module placement on. A tester's log of 2026-10-12 (66bcbc6a) printed
+// the faulting heap: segment 1 at 0x04820000, segment 2 at 0xF5690050. The
+// decoder's own pointer arithmetic is the likely reason and is not proven; what
+// is proven is that its heap had a segment above 2GB every time it crashed.
+bool IsKeptLowModuleName(const char* name) {
+    return _stricmp(name, "divxdecoder.dll") == 0;
+}
+
 unsigned char ClassifyModule(HMODULE h, const char* name) {
     if (h == g_client) return kClassClient;
     if (h == g_self) return kClassOurs;
     if (IsSystemModuleName(name)) return kClassSystem;
+    if (IsKeptLowModuleName(name)) return kClassKeptLow;
     return kClassOther;
 }
 
@@ -337,10 +353,11 @@ Decision Decide(PVOID* baseAddress, SIZE_T asked, ULONG allocationType, bool may
     // EAX inside a zero-filled table in the first 12 KB of the heap). The request is the first
     // one the segment cannot satisfy, so the heap manager reserves a second segment, 2 MB from
     // SegmentReserve, which is over HighPlacementMinKB, is attributed through the stack to the
-    // module that asked, and is moved above 2GB. That a segment of a heap lies above 2GB is the
-    // one thing these dumps could share and nothing in them shows: the second segment is not in
-    // them. A heap segment is also not placement-neutral the way a model buffer is, since every
-    // later caller of the heap is handed memory from it.
+    // module that asked, and is moved above 2GB. The dumps did not hold the second segment; the
+    // crash report's heap dump of 2026-10-12 did, at 0xF5690050, so DivxDecoder.dll is now a
+    // kept-low module (IsKeptLowModuleName) and its reservations are never moved. A heap segment
+    // is also not placement-neutral the way a model buffer is, since every later caller of the
+    // heap is handed memory from it.
     const bool fromHeapManager = (retAddr - g_ntdllLo) < g_ntdllSize;
     const bool heapGrowthLeft  = fromHeapManager && !Config::g_settings.OptHighPlacementHeapGrowth;
     const bool candidate    = mayPlace && (placeClient || placeModules) &&
@@ -366,6 +383,7 @@ Decision Decide(PVOID* baseAddress, SIZE_T asked, ULONG allocationType, bool may
         const unsigned char cls = g_slots[d.slot].cls;
         d.addTopDown = (cls == kClassClient && placeClient) ||
                        (cls == kClassOther && placeModules);
+        if (cls == kClassKeptLow) ++g_keptLow;
     }
     return d;
 }
@@ -520,6 +538,7 @@ const char* ClassName(unsigned char cls) {
         case kClassOurs:   return "this tool";
         case kClassSystem: return "system";
         case kClassOther:  return "module";
+        case kClassKeptLow: return "kept low";
         default:           return "-";
     }
 }
@@ -1313,6 +1332,8 @@ void LogStats() {
             Log("[HighPlacement] %lu reservation(s) of the minimum size or more were made by the heap manager "
                 "itself (a heap growing by a segment, or a large block) and were left where Windows put "
                 "them because HighPlacementHeapGrowth is 0; 1 places them as well.", g_heapGrowthLeft);
+        Log("[HighPlacement] %lu reservation(s) by DivxDecoder.dll, the movie decoder, left below 2GB "
+            "on purpose: its heap with a segment above 2GB is what crashed the Lich King movie.", g_keptLow);
     } else {
         Log("[HighPlacement] placement is off; this session only records who "
             "reserves what.");
