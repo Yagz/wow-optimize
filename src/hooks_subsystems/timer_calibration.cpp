@@ -137,6 +137,16 @@ void LogStats() {
         "performance counter; 3 or 4 = its comparison with the tick count failed; 5 = the timingMethod setting "
         "asked for the counter and the check had failed).",
         clock, g_clock == 1 ? ", so every timing it does has tick resolution" : "", g_reason);
+    // What the tick count costs is not obvious from the line above, and it is the
+    // answer to a report that reads "the character twitches and models shake when
+    // the camera turns, at a normal frame rate". The client reads this choice once,
+    // before the DLL is loaded, so nothing here can change it for the running game.
+    if (g_clock == 1) {
+        Log("[TimerCalibration]   the tick count moves in steps of the system tick (typically 15.6 ms), so above "
+            "about 64 frames a second movement and animation advance on some frames and stand still on the rest. "
+            "SET timingMethod \"2\" in WTF\\Config.wtf makes the client use the performance counter from its next "
+            "start; the launcher writes it while Timing CVar Pin is on and you press Save or LAUNCH WOW.");
+    }
 }
 
 }  // namespace TimerCalibration

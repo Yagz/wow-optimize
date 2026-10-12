@@ -47,11 +47,12 @@ extern "C" void GetTimeFast_NewFrame(void) {
 }
 
 bool InstallGetTimeFast(void) {
-    // DISABLED: GetTickCount is already hooked by our QPC precision hook.
-    // Double-hooking causes MH_CreateHook to fail. The QPC hook already
-    // provides microsecond precision which is better than frame caching.
-    // Frame-cached GetTickCount would conflict with the existing hook chain.
-    Log("[GetTimeFast] SKIPPED: GetTickCount already hooked by QPC precision hook");
+    // Not installed. This used to say GetTickCount was already hooked by a QPC
+    // precision hook; that hook has been switched off for a long time and nothing
+    // in this build hooks GetTickCount. A client whose startup clock check failed
+    // times every frame with GetTickCount, and a per-frame cache of it would make
+    // that clock coarser still.
+    Log("[GetTimeFast] not installed: GetTickCount is left to the system (nothing in this build hooks it)");
     return false;
 }
 

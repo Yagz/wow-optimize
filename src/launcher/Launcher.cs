@@ -759,7 +759,7 @@ namespace WowOptimizeLauncher {
                 { "D3D9Ex Vulkan DXVK Support", new SettingItem("General", "VulkanDXVK", false, null, "Optimizes DLL hook integration to work cleanly with DXVK (requires placing a d3d9.dll Vulkan wrapper in the game folder).") },
                 { "Skip Redundant Graphics State", new SettingItem("Graphics_Sound", "RenderStateDedup", false, null, "Does nothing in this build. The code that skipped repeated graphics-state calls is compiled out, and the counters that took its place found almost no repeats: a session of two hundred million calls found none. The key is still read, so an ini that names it loads, and it changes nothing.") },
                 { "Windows API Caches", new SettingItem("General", "TimingFix", false, null, "Caches the answers to Windows calls the client repeats constantly and that never change during a session: GetProcAddress, the module file name, environment variables, registry reads, system metrics, the OS version, system info and INI reads. Pure lookups, no game code touched.\n\nThis switch used to be called \"High-Precision Timing Fix\" and its description said it redirected GetTickCount and timeGetTime to the performance counter. It does not, and has not for some time - those three timer hooks, and the QPC coalescing cache with them, are compiled out of the build entirely after they were found to cause random stutters under DXVK. What was left behind the switch was these eight caches, which have nothing to do with timing, so a player chasing a timing bug turned off eight caches instead and a player wanting smoothness turned eight caches on. Reported by biship in #50, who read the code and was right about all of it.") },
-                { "Timing CVar Pin", new SettingItem("General", "TimingCvarPin", true, null, "Pins timingMethod to 2 and timingTestError to 0 whatever the client asks for. This has been on for everyone for a long time with no switch, buried inside the CVar safeguard; it now has its own. Leave it on unless you want the client's own timer choice back.") },
+                { "Timing CVar Pin", new SettingItem("General", "TimingCvarPin", true, null, "Makes the game time itself with the precise performance counter. On some machines the client's own startup check fails at random and falls back to a timer that moves in steps of about 16 ms; at a high frame rate the character then twitches and models shake while the camera turns, with a normal frame rate on the counter. This writes timingMethod \"2\" into WTF\\Config.wtf when you press Save or LAUNCH WOW, and the game reads it at its next start. Off puts a \"2\" back to \"0\", the client's own check. The DLL log says which clock the game ended up on, in the [TimerCalibration] line.") },
                 { "Client Crash Guards", new SettingItem("General", "CvarNullGuard", true, null, "Six guards against known client crashes, not one. It declines CVar writes through an object that looks uninitialised - which is what the option used to be named after - and it also wraps the Lua table read at 0x84x, the GUID type check that crashes on battleground load, the object reaper's null write on unlink, and two more null and bounds checks. Turning it off turns off all six, which the old name did not say. On by default. The timing CVar pin that used to ride along inside this feature has its own switch above.") },
                 { "WoW.exe Hooks: Performance", new SettingItem("General", "WowPerfHooks", true, null, "Installs the lua_type fast path when Lua Type Fast Path is also on. The six counting hooks this switch used to install were removed because they measured a benefit nowhere and cost a call on hot client functions, so with that one off this installs nothing. Default on.") },
                 { "WoW.exe Hooks: Extended", new SettingItem("General", "WowExtendedHooks", true, null, "Further hooks into the client. Your log says how many installed, on the line that starts with EXTENDED. Default on.") },
@@ -2421,6 +2421,72 @@ namespace WowOptimizeLauncher {
         private void SaveSettings() {
             iniPath = ResolveIniPath();
             SaveSettingsToPath(iniPath);
+            ApplyTimingMethodPin();
+        }
+
+        // The client picks its clock once, at start, seconds before the DLL is
+        // loaded. sub_4067F0 reads Config.wtf, then registers timingMethod with the
+        // value it found and hands it to the TimeManager (sub_86AEA0), which uses
+        // any value other than 0 in place of its own startup check. That check
+        // compares the performance counter with the tick count over 250 ms and
+        // gives up at 5 ms of difference; when it does, every frame is timed with
+        // GetTickCount, which moves in steps of the system tick (typically
+        // 15.6 ms). At a few hundred frames a second, movement and animation then
+        // advance on one frame in several and stand still on the rest: the
+        // character twitches and models shake while the camera turns, at a normal
+        // frame rate. One tester's machine failed the check on 4 of 10 starts. The
+        // DLL's own CVar pin arrives after this choice is made and never fired in
+        // any logged session, so the only place it can work is the file the client
+        // reads first.
+        //
+        // On: timingMethod "2", the performance counter whatever the check says.
+        // Off: a "2" goes back to "0", the client's own check; any other value the
+        // player wrote is left alone. The client writes Config.wtf back from memory
+        // when it exits, so a Save made while it runs counts from the start after
+        // that session; LAUNCH WOW saves before it starts the game.
+        //
+        // The file is edited as bytes through Latin-1 so every other line keeps its
+        // exact encoding and line endings. A missing file is left missing: the
+        // client creates it on its first exit, and the next Save adds the line.
+        private void ApplyTimingMethodPin() {
+            SettingItem pin = FindByKey("TimingCvarPin");
+            if (pin == null || pin.Ctrl == null) return;
+            string cfg = Path.Combine(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "WTF"), "Config.wtf");
+            try {
+                if (!File.Exists(cfg)) return;
+                Encoding latin = Encoding.GetEncoding(28591);
+                string text = latin.GetString(File.ReadAllBytes(cfg));
+                string nl = text.Contains("\r\n") ? "\r\n" : "\n";
+                string[] lines = text.Split('\n');
+                int found = -1;
+                string current = null;
+                for (int i = 0; i < lines.Length; i++) {
+                    string l = lines[i].TrimEnd('\r').Trim();
+                    if (!l.StartsWith("SET timingMethod ", StringComparison.OrdinalIgnoreCase)) continue;
+                    found = i;
+                    current = l.Substring("SET timingMethod ".Length).Trim().Trim('"');
+                }
+
+                bool on = pin.Ctrl.Checked;
+                string want = null;
+                if (on && current != "2") want = "2";
+                else if (!on && current == "2") want = "0";
+                if (want == null) return;
+
+                string line = "SET timingMethod \"" + want + "\"";
+                if (found >= 0) {
+                    bool cr = lines[found].EndsWith("\r");
+                    lines[found] = line + (cr ? "\r" : "");
+                    text = string.Join("\n", lines);
+                } else {
+                    if (text.Length > 0 && !text.EndsWith("\n")) text += nl;
+                    text += line + nl;
+                }
+                File.WriteAllBytes(cfg, latin.GetBytes(text));
+            } catch (Exception) {
+                // A locked or read-only Config.wtf leaves the client on its own
+                // choice; the DLL's [TimerCalibration] line says which clock it got.
+            }
         }
 
         // Switches split out of larger ones read their old parent as their default
