@@ -935,6 +935,11 @@ endif()
 # --- LTO / PGO (opt-in; see header block) ---
 if(WO_ENABLE_LTO AND MSVC)
     target_compile_options(wow_optimize PRIVATE $<$<CONFIG:Release>:/GL>)
+    # So the startup banner in a log says which kind of build wrote it.
+    target_compile_definitions(wow_optimize PRIVATE $<$<CONFIG:Release>:WOW_OPTIMIZE_LTO=1>)
+    if(WO_PGO STREQUAL "USE")
+        target_compile_definitions(wow_optimize PRIVATE $<$<CONFIG:Release>:WOW_OPTIMIZE_PGO=1>)
+    endif()
     if(WO_PGO STREQUAL "GEN")
         target_link_options(wow_optimize PRIVATE $<$<CONFIG:Release>:/LTCG:PGINSTRUMENT /GENPROFILE>)
         message(STATUS "wow_optimize: LTO + PGO INSTRUMENT (play a session to emit .pgc, then reconfigure WO_PGO=USE)")

@@ -8206,9 +8206,19 @@ static DWORD WINAPI MainThread(LPVOID param) {
     Log("  wow_optimize.dll v%s (build %s) BY %s",
         WOW_OPTIMIZE_VERSION_STR, WOW_OPTIMIZE_GIT_HASH, WOW_OPTIMIZE_AUTHOR);
     Log("  PID: %lu", GetCurrentProcessId());
+#ifdef WOW_OPTIMIZE_LTO
+    Log("  compiled with whole-program optimization (/GL /LTCG)%s",
+#ifdef WOW_OPTIMIZE_PGO
+        ", profile-guided");
+#else
+        ", no profile");
+#endif
+#else
+    Log("  compiled per file, without whole-program optimization");
+#endif
     LogHostEnvironment();
     Log("========================================");
-    
+
     if (IsRosetta()) {
         Log("[Rosetta] Detected x86 on ARM64 (macOS Rosetta 2)");
         char val[2] = {0};
