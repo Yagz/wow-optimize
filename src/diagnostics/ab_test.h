@@ -29,6 +29,12 @@ const char* Subject();
 // without reading the flag back.
 bool IsSubject(const char* name, bool* flag);
 
+// For a module that may only be measured on its own: true only in a run whose
+// AbTestSubject names it. The bundle, the rotation and the sweep never adopt it,
+// so their figures stay comparable with sessions before it registered. Call after
+// Init (the harness must already be running); a call before it returns false.
+bool IsNamedSubject(const char* name, bool* flag);
+
 // For the hot path of the module that answered true above: true means stand
 // aside and let the client's own code run, because the test is in an OFF stint.
 // Counts the call, so the report can say the subject was actually reached.

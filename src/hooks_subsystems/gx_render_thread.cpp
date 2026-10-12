@@ -52,6 +52,7 @@
 #include "diagnostics/frame_bench.h"
 #include "loading_state.h"
 #include "lua_optimize.h"
+#include "diagnostics/ab_test.h"
 
 extern "C" void Log(const char* fmt, ...);
 extern "C" void WowOpt_OnFrameBoundary();
@@ -63,6 +64,8 @@ Ring        g_ring;
 FrameArena  g_arena;
 volatile LONG g_dead = 0;
 volatile LONG g_active = 0;
+volatile LONG g_queueOff = 0;
+long        g_emulatedLocks = 0;
 DWORD       g_mainTid = 0;
 void*       g_orig[kSlots] = {};
 IDirect3DDevice9* g_dev = nullptr;
@@ -535,7 +538,44 @@ HRESULT __stdcall T_DrawIndexedPrimitive(IDirect3DDevice9* d, D3DPRIMITIVETYPE t
     c->type = t; c->baseVertex = base; c->minVertex = minV; c->numVertices = numV; c->startIndex = startIdx; c->prims = prims;
     ++g_cmds[OP_DRAW_INDEXED]; return D3D_OK;
 }
+// ---- A/B: queueing against direct calls on the same device ---------------------------------
+// Only as the named subject (AbTestSubject=D3d9RenderThread), never in the bundle:
+// switching the queue every 20 s inside the bundle would change what every earlier
+// bundle figure meant. OFF stints call the device directly from the main thread.
+// The device is still the MULTITHREADED one this module created, so OFF is not the
+// client without this module: the runtime's own lock is paid in both halves.
+bool          g_abSubject = false;
+bool          g_abOffered = false;
+unsigned long g_abToDirect = 0, g_abToQueued = 0, g_abWaitLocks = 0, g_abWaitDrain = 0;
+
+// The harness's half, applied at the one point where switching is safe: the start
+// of a Present on the main thread, before anything of the frame is decided. Going
+// direct needs the ring empty and no buffer lock answered from the arena or a
+// shadow still open - its Unlock would otherwise reach a buffer that was never
+// really locked. A switch that cannot happen yet waits for the next Present.
+void AbLatch() {
+    const bool wantDirect = AbTest::StandAside();
+    if (wantDirect == (g_queueOff != 0)) return;
+    if (!wantDirect) {
+        InterlockedExchange(&g_queueOff, 0);
+        ++g_abToQueued;
+        return;
+    }
+    if (g_emulatedLocks != 0) { ++g_abWaitLocks; return; }
+    Drain();
+    if (g_ring.rd != g_ring.wr) { ++g_abWaitDrain; return; }
+    // Work the render thread left for the main thread during that last queued frame.
+    // Direct frames run the state manager's Present hook here, which does its own.
+    D3D9StateManager_RunDeferredMainThreadWork();
+    InterlockedExchange(&g_queueOff, 1);
+    ++g_abToDirect;
+}
+
 HRESULT __stdcall T_Present(IDirect3DDevice9* d, const RECT* src, const RECT* dst, HWND wnd, const RGNDATA* dirty) {
+    // Before the Live() test: a frame that switches decides here which path it takes,
+    // so the frame boundary runs exactly once - inside this function when queued, in
+    // the state manager's Present hook on this thread when direct.
+    if (g_abSubject && Owned()) AbLatch();
     if (!Live()) return O<F_Present>(S_Present)(d, src, dst, wnd, dirty);
     if (dirty) {                                    // a dirty region is not carried; do this one here
         ++g_presentFallbacks;
@@ -872,6 +912,13 @@ HRESULT __stdcall Hook_CreateDevice(IDirect3D9* self, UINT adapter, D3DDEVTYPE t
             Log("[GxRT] ACTIVE: device %p created MULTITHREADED, render thread started, main thread id %lu. "
                 "Draws and state changes are queued; the main thread may run %u frame(s) ahead.",
                 (void*)g_dev, (unsigned long)g_mainTid, (unsigned)kMaxFramesInFlight);
+            if (!g_abOffered) {
+                g_abOffered = true;
+                g_abSubject = AbTest::IsNamedSubject("D3d9RenderThread", &g_abSubject);
+                if (g_abSubject)
+                    Log("[GxRT] the A/B subject: ON stints queue to the render thread, OFF stints call the same "
+                        "device directly from the main thread. The switch happens at the start of a Present.");
+            }
         }
     }
     return hr;
@@ -1178,6 +1225,15 @@ void LogStats() {
         "to drain. Zero created means the client never used one this session: measured and zero.",
         g_queryCreates, g_queryIssues, g_queryIssueDrains);
     BuffersLogStats();
+    if (g_abSubject) {
+        Log("[GxRT]   A/B: %lu switch(es) to direct calls, %lu back to queueing; %lu switch(es) waited a frame for "
+            "an open buffer lock and %lu for the ring to drain. OFF here is the same MULTITHREADED device called "
+            "directly, not the client without this module. The frame times of each half are in the AbTest report.",
+            g_abToDirect, g_abToQueued, g_abWaitLocks, g_abWaitDrain);
+    } else if (AbTest::Running()) {
+        Log("[GxRT]   not the A/B subject, so the A/B halves both had the render thread. "
+            "AbTestSubject=D3d9RenderThread measures it.");
+    }
 }
 
 }  // namespace GxRT

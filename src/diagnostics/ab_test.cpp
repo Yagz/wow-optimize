@@ -439,6 +439,13 @@ bool IsSubject(const char* name, bool* flag) {
     return true;
 }
 
+bool IsNamedSubject(const char* name, bool* flag) {
+    if (!Config::g_settings.OptAbTest || !g_active) return false;
+    if (g_sweep || g_bundle || g_rotate) return false;
+    if (lstrcmpiA(g_subject, name) != 0) return false;
+    return IsSubject(name, flag);
+}
+
 // The state DiagBegin saves, so DiagEnd can put every flag back exactly.
 static bool g_diagOn = false;
 static bool g_diagSavedOn = true;

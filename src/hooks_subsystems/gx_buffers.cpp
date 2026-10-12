@@ -269,6 +269,7 @@ HRESULT __stdcall T_BufLock(void* self, UINT off, UINT size, void** pp, DWORD fl
 
     if (newMode == MODE_ARENA) { *pp = direct; ++g_lockDirect; }
     else                       { *pp = shadow + off; ++g_lockShadow; }
+    ++g_emulatedLocks;          // an A/B switch to direct calls waits until this is back to zero
     return D3D_OK;
 }
 
@@ -288,6 +289,7 @@ HRESULT __stdcall T_BufUnlock(void* self) {
     TblUnlock();
 
     if (mode == MODE_NONE) return vi->unlock(self);                         // a real lock (SYNC class or a fallback)
+    --g_emulatedLocks;
     if (flags & D3DLOCK_READONLY) return D3D_OK;
 
     const DWORD lf = flags & kRealLockMask;
@@ -315,14 +317,14 @@ HRESULT __stdcall T_BufUnlock(void* self) {
 HRESULT __stdcall T_CreateVertexBuffer(IDirect3DDevice9* d, UINT len, DWORD usage, DWORD fvf,
                                        D3DPOOL pool, IDirect3DVertexBuffer9** pp, HANDLE* shared) {
     const HRESULT hr = O<F_CreateVB>(26)(d, len, usage, fvf, pool, pp, shared);
-    if (SUCCEEDED(hr) && pp && *pp && Live() && !shared) Track(*pp, len, usage, pool);
+    if (SUCCEEDED(hr) && pp && *pp && Owned() && !shared) Track(*pp, len, usage, pool);
     return hr;
 }
 
 HRESULT __stdcall T_CreateIndexBuffer(IDirect3DDevice9* d, UINT len, DWORD usage, D3DFORMAT fmt,
                                       D3DPOOL pool, IDirect3DIndexBuffer9** pp, HANDLE* shared) {
     const HRESULT hr = O<F_CreateIB>(27)(d, len, usage, fmt, pool, pp, shared);
-    if (SUCCEEDED(hr) && pp && *pp && Live() && !shared) Track(*pp, len, usage, pool);
+    if (SUCCEEDED(hr) && pp && *pp && Owned() && !shared) Track(*pp, len, usage, pool);
     return hr;
 }
 
