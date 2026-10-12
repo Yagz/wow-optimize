@@ -92,15 +92,22 @@ unsigned long long g_verifiedCalls = 0;
 unsigned long long g_mismatches    = 0;
 
 inline void Fast_CalcBounds(const float* a2, int& out_min_x, int& out_max_x, int& out_min_y, int& out_max_y) {
-    // Client operation order in x87:
+    // Client operation order in x87, which carries 53 bits through every step and rounds
+    // once per operation: a float operand is exact in double, and a double add or multiply is
+    // that same single rounding. The chain therefore stays in double from the first operation.
+    // An earlier form rounded the sum and the product to float in between, which the client
+    // does not do: against the client's own sequence over two million random queries it
+    // differed in 201, and the self-test below happened to pass or fail with the codegen.
     // 1: (pos_x + radius) * 0.05f + 0.5f
-    double v1 = (double)((float)(a2[1] + a2[4]) * 0.05f) + 0.5;
+    const double inv = (double)kInvCellSize;
+    const double x = (double)a2[1], y = (double)a2[2], r = (double)a2[4];
+    double v1 = (x + r) * inv + 0.5;
     // 2: (pos_y - radius) * 0.05f - 0.5f
-    double v2 = (double)((float)(a2[2] - a2[4]) * 0.05f) - 0.5;
+    double v2 = (y - r) * inv - 0.5;
     // 3: (radius + pos_y) * 0.05f + 0.5f
-    double v3 = (double)((float)(a2[4] + a2[2]) * 0.05f) + 0.5;
+    double v3 = (r + y) * inv + 0.5;
     // 4: (pos_x - radius) * 0.05f - 0.5f
-    double v4 = (double)((float)(a2[1] - a2[4]) * 0.05f) - 0.5;
+    double v4 = (x - r) * inv - 0.5;
 
     out_max_x = (int)std::floor(v1) & 0x3F;
     out_min_y = (int)std::floor(v2) & 0x3F;
@@ -110,7 +117,12 @@ inline void Fast_CalcBounds(const float* a2, int& out_min_x, int& out_max_x, int
 
 static double (__cdecl * const p_crt_floor)(double) = std::floor;
 
-inline void Client_CalcBounds(const float* a2, int& out_min_x, int& out_max_x, int& out_min_y, int& out_max_y) {
+// Not inline: the block below calls the CRT's floor, which clobbers ecx and edx, and the
+// compiler only learns that eax is written. Inlined into a loop it kept a value in ecx or edx
+// across the block and read garbage (90% of 2000000 random queries differed from the same
+// code left out of line, 2026-10-13). A real call boundary makes the caller assume both gone.
+__declspec(noinline)
+void Client_CalcBounds(const float* a2, int& out_min_x, int& out_max_x, int& out_min_y, int& out_max_y) {
     float pos_x = a2[1];
     float pos_y = a2[2];
     float radius = a2[4];
