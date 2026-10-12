@@ -707,6 +707,10 @@ static int g_loadingGraceFrames = 0;
 // Smoothed net allocation rate (bytes/frame) for adaptive GC
 static double g_smoothedNetAlloc = 0.0;
 static unsigned long g_gcBudgetCuts = 0;   // steps stopped by the time budget before their kilobytes were spent
+// GC work done while a loading screen is up, and how many ticks asked for it. Main thread only.
+constexpr double kLoadingGcBudgetMs = 1.0;
+static double        g_loadingGcMs    = 0.0;
+static unsigned long g_loadingGcTicks = 0;
 static bool g_gcVaPressure = false;
 
 // lua_gc(LUA_GCSTEP, kb) is not a step of kb kilobytes of work. The client's lua_gc (sub_84ED50,
@@ -871,19 +875,26 @@ static void StepGC(lua_State* L, double frameMs) {
         return;
     }
 
-    // During loading screens, the Sleep hook may not fire for seconds, so the
-    // per-frame GC step misses entirely. When it does fire, burst-step several
-    // times at the loading interval to catch up — this prevents the post-load
-    // freeze spike when the world first renders and triggers a forced collection.
+    // During a loading screen this is reached from the client's file-wait loop, which sleeps 1 ms
+    // at a time, so it runs every eight milliseconds of the load, not "once in a few seconds" as
+    // the burst below it used to assume. The burst was four steps of up to 512 KB with no time
+    // limit, and on a 450 MB heap that was 23.5% of the main thread's samples in a tester's
+    // loading frames (2026-10-12, three loads, 2a68090c) while the client's own completions
+    // waited behind it. The same kilobytes are asked for now, inside a time budget of 1 ms a
+    // tick; what does not fit is collected by the ordinary steps after the load.
     if (Config.isLoading) {
         int stepKB = Config.loadingStepKB;
         if (stepKB > 1024) stepKB = 1024;
-        for (int burst = 0; burst < 4; burst++) {
-            __try {
-                Api.lua_gc(L, LUA_GCSTEP, stepKB);
-                State.gcStepsTotal++;
-            } __except(EXCEPTION_EXECUTE_HANDLER) { break; }
-        }
+        if (g_gcPerfFreq.QuadPart == 0) QueryPerformanceFrequency(&g_gcPerfFreq);
+        LARGE_INTEGER before, after;
+        QueryPerformanceCounter(&before);
+        __try {
+            BoundedGcStep(L, stepKB * 4, kLoadingGcBudgetMs);
+            State.gcStepsTotal++;
+        } __except(EXCEPTION_EXECUTE_HANDLER) {}
+        QueryPerformanceCounter(&after);
+        g_loadingGcMs += (double)(after.QuadPart - before.QuadPart) * 1000.0 / (double)g_gcPerfFreq.QuadPart;
+        ++g_loadingGcTicks;
         return;
     }
 
@@ -2371,6 +2382,11 @@ void LogStats() {
     Log("[LuaOpt] GC step budget: %lu step(s) stopped by their time budget (3 ms a frame, 1.5 on a slow "
         "frame, 5 under address-space pressure) before their kilobytes were spent; the rest of that "
         "step is not carried over. Plain counter, lower bound.", g_gcBudgetCuts);
+    if (g_loadingGcTicks)
+        Log("[LuaOpt] GC inside loading screens: %.1f ms over %lu tick(s), at most %.1f ms a tick.",
+            g_loadingGcMs, g_loadingGcTicks, kLoadingGcBudgetMs);
+    else
+        Log("[LuaOpt] GC inside loading screens: no tick asked for a step yet.");
     Log("[LuaOpt] Lua memory %.1f MB (%s). Manual GC stepping is %s. Collection "
         "counter %d (completed incremental cycles plus emergency and "
         "loading-screen steps); the emergency collector starts at 300 MB and "
