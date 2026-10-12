@@ -74,15 +74,19 @@ bool SkipSleep(DWORD ms) {
 void Init() {
     if (!Config::g_settings.OptLoadingFrameCap) return;
     Log("[LoadingFrameCap] ACTIVE: the client's frame limiter (sub_6836D0) does not sleep while a loading screen is up, "
-        "for at most %lu s of one loading screen. The cap outside loading screens is untouched. Not run in a game: the "
-        "Load took lines with the switch on and off are the measurement.", (unsigned long)(kMaxWindowMs / 1000));
+        "for at most %lu s of one loading screen. The cap outside loading screens is untouched. It only has work on a "
+        "client whose frame rate is capped: with maxFPS 0 and the window active the limiter returns before it sleeps. "
+        "The ms skipped below is the most a load can have gained.", (unsigned long)(kMaxWindowMs / 1000));
 }
 
 void LogStats() {
     if (!Config::g_settings.OptLoadingFrameCap) return;
     if (g_asked == 0) {
-        Log("[LoadingFrameCap] the client's frame limiter has not reached the Sleep hook, so nothing was skipped and "
-            "nothing was measured.");
+        // sub_6836D0 returns before its sleep when maxFPS is 0 and the window is
+        // active, which is every uncapped client in the foreground. A tester ran it
+        // through three raid sessions that way and it never had a sleep to skip.
+        Log("[LoadingFrameCap] the client's frame limiter never slept, so there was nothing to skip: this is what an "
+            "uncapped client (maxFPS 0) in the foreground does, and the switch does nothing there.");
         return;
     }
     Log("[LoadingFrameCap] frame limiter sleeps seen %lu; skipped %lu (%lu ms asked for) in %lu loading screen(s); kept %lu "
