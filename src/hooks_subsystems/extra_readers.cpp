@@ -37,10 +37,15 @@
 // can complete before it. Callers that queue dependent work do it from the completion callback (the
 // chain scenario), which is unaffected, but a caller that queues A then B and assumes A is done when
 // B is would be. The client's own three-queue mode already breaks any global order across queues,
-// which is the only reason to expect that none does. That is a hypothesis; a tester log decides.
+// which is the only reason to expect that none does. That is a hypothesis; no tester has been asked
+// to look for it, and none has reported a wrong model or texture after a load.
 //
-// Off by default (General/ExtraReaderThread), experimental. Declines under Wine/Rosetta, under No
-// Client Patches, and when the file layer is already in its three-thread mode.
+// Field loads, same two loads with the switch off and on: a stock client whose loads are one
+// reader's decompression, 3561 -> 2326 ms and 5406 -> 3147 ms; a client whose loads are mostly
+// addon Lua, about -6% on three loads and +2.5% on a fourth. One pair per setting on the first.
+//
+// On by default (General/ExtraReaderThread). Declines under Wine/Rosetta, under No Client
+// Patches, and when the file layer is already in its three-thread mode.
 // ============================================================================
 #include "extra_readers.h"
 #include <windows.h>
@@ -109,8 +114,8 @@ void OnFrame() {
     if (!g_thread) { Decline("the client's thread routine returned nothing."); return; }
     g_state = 1;
     Log("[ExtraReaders] ACTIVE: a second reader thread (CAsyncThread %p) serves the client's asynchronous file queue. "
-        "Requests are still taken one at a time under the queue's lock. Not run in a game; the Load took lines with the "
-        "switch on and off are the measurement.", g_thread);
+        "Requests are still taken one at a time under the queue's lock. The Load took lines with the switch on and off "
+        "are the measurement.", g_thread);
 }
 
 void LogStats() {
