@@ -218,12 +218,13 @@ namespace WowOptimizeLauncher {
             // TRY THE UNPROVEN ONES turns them on.
             "M2AnimReuse", "CollisionFaceClip",
 
-            // Measured slower than the client's own fill on the same input, by its
-            // own check, in a field session on a modified client: 1.07x over the
-            // last 52897 pairs and 1.12x over the session, and the particle
-            // evaluator model inside it 1.87x. One switch owns both. A replacement
-            // that costs more than it replaces has no case; take it out of this
-            // list to put it back.
+            // The particle evaluator model inside it measured 1.87x slower than the
+            // client's evaluator in a field session on a modified client, timed in
+            // alternating order so neither side always meets the cold caches; the
+            // armed fill uses that model. The fill's own figure from the same
+            // session (1.07x slower) is not evidence either way: its timing always
+            // runs ours first, on caches the client's run then finds warm. One
+            // switch owns both. Take it out of this list to put it back.
             "ParticleFillFast",
 
             // Computes a distance and a speed in single precision where the client
