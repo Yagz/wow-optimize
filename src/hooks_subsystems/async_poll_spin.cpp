@@ -314,12 +314,16 @@ void UpdateMode() {
 // kept here for the main thread while the wrapper runs.
 volatile uintptr_t g_mainWrapperCaller = 0;
 
+// Restores the previous value rather than zeroing it: the Sleep hook runs the main
+// thread pump before it reads this, and a wrapper call made from inside the pump
+// would otherwise clear the outer call's caller on its way out.
 struct WrapperCallerScope {
     bool set;
-    explicit WrapperCallerScope(uintptr_t ret) : set(GetCurrentThreadId() == g_mainThreadId) {
-        if (set) g_mainWrapperCaller = ret;
+    uintptr_t prev;
+    explicit WrapperCallerScope(uintptr_t ret) : set(GetCurrentThreadId() == g_mainThreadId), prev(0) {
+        if (set) { prev = g_mainWrapperCaller; g_mainWrapperCaller = ret; }
     }
-    ~WrapperCallerScope() { if (set) g_mainWrapperCaller = 0; }
+    ~WrapperCallerScope() { if (set) g_mainWrapperCaller = prev; }
 };
 
 void __cdecl Hooked_OsSleep(DWORD ms) {
