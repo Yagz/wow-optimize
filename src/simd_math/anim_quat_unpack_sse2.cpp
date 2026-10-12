@@ -253,6 +253,23 @@ inline void Copy4(float* dst, const float* src) {
 // The cookie costs a load, an xor and a compare per call. It is on a path taken
 // 4231323327 times a session and that is a real price, but the trade was made
 // on an inventory of writers that was not complete.
+//
+// The inventory, completed from the disassembly on 2026-10-12. Every write into a
+// local of this frame, by every routine that can receive its address:
+//   sub_8284D0 (kFindKey) writes *hint, *second and *frac, four bytes each, on all
+//     of its return paths and through no other pointer it is given.
+//   sub_982630 (kQuatLerp) writes out[0..3], then normalises those same sixteen
+//     bytes in place through sub_982570, which takes out in ECX.
+//   sub_982460 (kQuatSlerp) writes out[0..3] on both of its branches.
+//   The detours in this tree on two of them write no more: QuatLerp's
+//     LerpNormalise is one sixteen-byte store into out, and M2AnimFindKey writes
+//     hint, second and frac. Nothing in this tree detours sub_982460 any more.
+//   UnpackQuat and Copy4 are ours: one sixteen-byte store at offset zero each.
+// No writer takes a length or an index from the client, so no write can pass the
+// end of a local, and the cookie guards nothing. The 1.0f crash that prompted the
+// revert was a float overwriting a function pointer through an unchecked stash
+// index elsewhere, not an overrun here.
+__declspec(safebuffers)
 void Evaluate(void* obj, uint8_t* state, uint8_t* track,
               uint32_t* out, const float* defQuat) {
     const uint32_t  count   = *(const uint32_t*)(track + kT_count);
@@ -326,15 +343,36 @@ void __cdecl Hooked_TrackQuatBody(void* obj, void* state, void* track,
     if (!g_armed || (g_calls & kResampleMask) == 0) {
         uint32_t saved[6], theirs[6];
         memcpy(saved, out, sizeof(saved));
-        const unsigned long long tA = SelfBench::Now();
-        orig_TrackQuat(obj, state, track, out, defQuat);
-        const unsigned long long tB = SelfBench::Now();
-        memcpy(theirs, out, sizeof(theirs));
-        memcpy(out, saved, sizeof(saved));
+        // The only thing either side writes is the block at `out`, and it is put back
+        // between the two runs, so the order can alternate: neither half always meets
+        // the cold caches and the other the warm ones. Either way `out` ends holding
+        // ours and `theirs` the client's, as the comparison below expects.
+        static unsigned s_benchOrder = 0;
+        if (++s_benchOrder & 1) {
+            const unsigned long long tA = SelfBench::Now();
+            orig_TrackQuat(obj, state, track, out, defQuat);
+            const unsigned long long tB = SelfBench::Now();
+            memcpy(theirs, out, sizeof(theirs));
+            memcpy(out, saved, sizeof(saved));
 
-        const unsigned long long tC = SelfBench::Now();
-        Evaluate(obj, (uint8_t*)state, (uint8_t*)track, out, defQuat);
-        SelfBench::Pair(g_benchSlot, SelfBench::Now() - tC, tB - tA);
+            const unsigned long long tC = SelfBench::Now();
+            Evaluate(obj, (uint8_t*)state, (uint8_t*)track, out, defQuat);
+            SelfBench::Pair(g_benchSlot, SelfBench::Now() - tC, tB - tA);
+        } else {
+            uint32_t mine[6];
+            const unsigned long long tA = SelfBench::Now();
+            Evaluate(obj, (uint8_t*)state, (uint8_t*)track, out, defQuat);
+            const unsigned long long tB = SelfBench::Now();
+            memcpy(mine, out, sizeof(mine));
+            memcpy(out, saved, sizeof(saved));
+
+            const unsigned long long tC = SelfBench::Now();
+            orig_TrackQuat(obj, state, track, out, defQuat);
+            const unsigned long long tD = SelfBench::Now();
+            memcpy(theirs, out, sizeof(theirs));
+            memcpy(out, mine, sizeof(mine));
+            SelfBench::Pair(g_benchSlot, tB - tA, tD - tC);
+        }
         g_verified++;
 
         if (memcmp(out, theirs, sizeof(theirs)) != 0) {
@@ -430,7 +468,7 @@ bool Init() {
 
     g_installed = true;
     SamplingProfiler::RegisterSelfSymbol("AnimQuatUnpack_SSE2", (const void*)&Hooked_TrackQuat);
-    g_benchSlot = SelfBench::Register("AnimQuatUnpack", SelfBench::kTheirsFirst);
+    g_benchSlot = SelfBench::Register("AnimQuatUnpack");
     Log("[AnimQuatUnpack] ACTIVE on sub_828680 (0x%08X), the bone rotation track, "
         "run once per animated bone per frame from the largest entry in the "
         "main-thread profile. Each keyframe is four uint16 expanded as v * K - "

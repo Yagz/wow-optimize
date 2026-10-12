@@ -266,15 +266,36 @@ void __cdecl Hooked_VecTrackBody(void* obj, void* state, void* track,
     if (!g_armed || (g_calls & kResampleMask) == 0) {
         uint32_t saved[5], theirs[5];
         memcpy(saved, out, sizeof(saved));
-        const unsigned long long tA = SelfBench::Now();
-        orig_VecTrack(obj, state, track, out, defVec);
-        const unsigned long long tB = SelfBench::Now();
-        memcpy(theirs, out, sizeof(theirs));
-        memcpy(out, saved, sizeof(saved));
+        // The only thing either side writes is the block at `out`, and it is put back
+        // between the two runs, so the order can alternate: neither half always meets
+        // the cold caches and the other the warm ones. Either way `out` ends holding
+        // ours and `theirs` the client's, as the comparison below expects.
+        static unsigned s_benchOrder = 0;
+        if (++s_benchOrder & 1) {
+            const unsigned long long tA = SelfBench::Now();
+            orig_VecTrack(obj, state, track, out, defVec);
+            const unsigned long long tB = SelfBench::Now();
+            memcpy(theirs, out, sizeof(theirs));
+            memcpy(out, saved, sizeof(saved));
 
-        const unsigned long long tC = SelfBench::Now();
-        Evaluate(obj, (uint8_t*)state, (uint8_t*)track, out, defVec);
-        SelfBench::Pair(g_benchSlot, SelfBench::Now() - tC, tB - tA);
+            const unsigned long long tC = SelfBench::Now();
+            Evaluate(obj, (uint8_t*)state, (uint8_t*)track, out, defVec);
+            SelfBench::Pair(g_benchSlot, SelfBench::Now() - tC, tB - tA);
+        } else {
+            uint32_t mine[5];
+            const unsigned long long tA = SelfBench::Now();
+            Evaluate(obj, (uint8_t*)state, (uint8_t*)track, out, defVec);
+            const unsigned long long tB = SelfBench::Now();
+            memcpy(mine, out, sizeof(mine));
+            memcpy(out, saved, sizeof(saved));
+
+            const unsigned long long tC = SelfBench::Now();
+            orig_VecTrack(obj, state, track, out, defVec);
+            const unsigned long long tD = SelfBench::Now();
+            memcpy(theirs, out, sizeof(theirs));
+            memcpy(out, mine, sizeof(mine));
+            SelfBench::Pair(g_benchSlot, tB - tA, tD - tC);
+        }
         g_verified++;
 
         if (memcmp(out, theirs, sizeof(theirs)) != 0) {
@@ -349,7 +370,7 @@ bool Init() {
 
     g_installed = true;
     SamplingProfiler::RegisterSelfSymbol("AnimVec3Track_SSE2", (const void*)&Hooked_VecTrack);
-    g_benchSlot = SelfBench::Register("AnimVec3Track", SelfBench::kTheirsFirst);
+    g_benchSlot = SelfBench::Register("AnimVec3Track");
     Log("[AnimVec3Track] ACTIVE on sub_82B0A0 (0x%08X), the vector animation "
         "track. Eight call sites, six of them inside the largest entry in the "
         "main-thread profile, against one for the quaternion track already "
