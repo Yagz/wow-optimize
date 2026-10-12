@@ -157,14 +157,27 @@ void __cdecl Detour(float x, float* outFrac, int* outInt) {
 
     float mineF = 0.0f;
     int   mineI = 0;
+    // Alternated, so neither half always meets the cold caches and the other the warm ones.
+    static unsigned s_benchOrder = 0;
+    unsigned long long oursCycles, theirsCycles;
     const unsigned long long tA = SelfBench::Now();
-    Split(x, &mineF, &mineI);
-    const unsigned long long tB = SelfBench::Now();
-    g_orig(x, outFrac, outInt);
+    if (++s_benchOrder & 1) {
+        g_orig(x, outFrac, outInt);
+        const unsigned long long tB = SelfBench::Now();
+        Split(x, &mineF, &mineI);
+        oursCycles = SelfBench::Now() - tB;
+        theirsCycles = tB - tA;
+    } else {
+        Split(x, &mineF, &mineI);
+        const unsigned long long tB = SelfBench::Now();
+        g_orig(x, outFrac, outInt);
+        oursCycles = tB - tA;
+        theirsCycles = SelfBench::Now() - tB;
+    }
     // SelfBench adds its sums without a lock; the particle workers reach this
     // function too.
     if (!ParallelParticles::OnWorkerThread())
-        SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
+        SelfBench::Pair(g_benchSlot, oursCycles, theirsCycles);
 
     uint32_t mineBits, theirBits;
     memcpy(&mineBits, &mineF, 4);

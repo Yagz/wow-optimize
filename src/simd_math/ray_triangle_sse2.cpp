@@ -389,23 +389,38 @@ inline int Hooked_TestImpl(const void* ray, const void* verts, const void* tri,
     // another reported 1.35x, and the difference was the guard the measurement
     // was carrying and the armed path was not.
     const bool unguarded = ch.armed && ch.caught == 0;
-    const uint64_t tOursA = SelfBench::Now();
-    if (unguarded) {
+    // On the timed (unguarded) shape the two halves alternate which runs first, so
+    // neither always meets the cold caches and the other the warm ones. Ours writes
+    // only its private result and reads none of the caller's buffers.
+    static unsigned s_benchOrder = 0;
+    int theirs;
+    if (unguarded && (++s_benchOrder & 1)) {
+        const uint64_t tA = SelfBench::Now();
+        theirs = orig(ray, verts, tri, outT, outUV, tol);
+        const uint64_t tB = SelfBench::Now();
         ours = Test<IndexT>((const float*)ray, (const float*)verts,
                             (const IndexT*)tri, outT != nullptr, outUV != nullptr,
                             tol, &mine);
-    } else if (!TestGuardedCall<IndexT>(ray, verts, tri, outT != nullptr,
-                                        outUV != nullptr, tol, &mine, &ours,
-                                        ch.caught)) {
-        return orig(ray, verts, tri, outT, outUV, tol);
-    }
+        SelfBench::Pair(ch.benchSlot, SelfBench::Now() - tB, tB - tA);
+    } else {
+        const uint64_t tOursA = SelfBench::Now();
+        if (unguarded) {
+            ours = Test<IndexT>((const float*)ray, (const float*)verts,
+                                (const IndexT*)tri, outT != nullptr, outUV != nullptr,
+                                tol, &mine);
+        } else if (!TestGuardedCall<IndexT>(ray, verts, tri, outT != nullptr,
+                                            outUV != nullptr, tol, &mine, &ours,
+                                            ch.caught)) {
+            return orig(ray, verts, tri, outT, outUV, tol);
+        }
 
-    const uint64_t tOursB = SelfBench::Now();
-    const int theirs = orig(ray, verts, tri, outT, outUV, tol);
-    const uint64_t tTheirsB = SelfBench::Now();
-    // Only the armed shape is filed, so the average is not half guarded calls
-    // from the learning phase and half the real thing.
-    if (unguarded) SelfBench::Pair(ch.benchSlot, tOursB - tOursA, tTheirsB - tOursB);
+        const uint64_t tOursB = SelfBench::Now();
+        theirs = orig(ray, verts, tri, outT, outUV, tol);
+        const uint64_t tTheirsB = SelfBench::Now();
+        // Only the armed shape is filed, so the average is not half guarded calls
+        // from the learning phase and half the real thing.
+        if (unguarded) SelfBench::Pair(ch.benchSlot, tOursB - tOursA, tTheirsB - tOursB);
+    }
     ++ch.verified;
     if (theirs & 0xFF) ++ch.hits;   // counted on both paths, or the rate lies
 
@@ -589,20 +604,34 @@ char __cdecl Hooked_RayPlane(const float* ray, const float* plane,
     // The armed shape, so the pair below times what actually runs. See the note
     // in the triangle test above.
     const bool unguarded = g_chPlane.armed && g_chPlane.caught == 0;
-    const uint64_t tOursA = SelfBench::Now();
-    if (unguarded) {
+    // On the timed (unguarded) shape the two halves alternate which runs first, so
+    // neither always meets the cold caches and the other the warm ones. Ours writes
+    // only its private result and reads none of the caller's buffers.
+    static unsigned s_benchOrder = 0;
+    char theirs;
+    if (unguarded && (++s_benchOrder & 1)) {
+        const uint64_t tA = SelfBench::Now();
+        theirs = orig(ray, plane, outT, outPoint, tol);
+        const uint64_t tB = SelfBench::Now();
         ours = RayPlaneTest(ray, plane, outT != nullptr, outPoint != nullptr,
                             tol, &mine);
-    } else if (!RayPlaneGuardedCall(ray, plane, outT != nullptr, outPoint != nullptr,
-                                    tol, &mine, &ours, g_chPlane.caught)) {
-        return orig(ray, plane, outT, outPoint, tol);
-    }
+        SelfBench::Pair(g_chPlane.benchSlot, SelfBench::Now() - tB, tB - tA);
+    } else {
+        const uint64_t tOursA = SelfBench::Now();
+        if (unguarded) {
+            ours = RayPlaneTest(ray, plane, outT != nullptr, outPoint != nullptr,
+                                tol, &mine);
+        } else if (!RayPlaneGuardedCall(ray, plane, outT != nullptr, outPoint != nullptr,
+                                        tol, &mine, &ours, g_chPlane.caught)) {
+            return orig(ray, plane, outT, outPoint, tol);
+        }
 
-    const uint64_t tOursB = SelfBench::Now();
-    const char theirs = orig(ray, plane, outT, outPoint, tol);
-    const uint64_t tTheirsB = SelfBench::Now();
-    if (unguarded)
-        SelfBench::Pair(g_chPlane.benchSlot, tOursB - tOursA, tTheirsB - tOursB);
+        const uint64_t tOursB = SelfBench::Now();
+        theirs = orig(ray, plane, outT, outPoint, tol);
+        const uint64_t tTheirsB = SelfBench::Now();
+        if (unguarded)
+            SelfBench::Pair(g_chPlane.benchSlot, tOursB - tOursA, tTheirsB - tOursB);
+    }
     ++g_chPlane.verified;
     if (theirs & 0xFF) ++g_chPlane.hits;
 
@@ -733,17 +762,30 @@ char __cdecl Hooked_PointInPoly(const float* pt, const float* verts,
 
     int ours = 0;
     const bool unguarded = g_chPoly.armed && g_chPoly.caught == 0;
-    const uint64_t tOursA = SelfBench::Now();
-    if (unguarded) {
+    // On the timed (unguarded) shape the two halves alternate which runs first, so
+    // neither always meets the cold caches and the other the warm ones. Ours writes
+    // only its private result and reads none of the caller's buffers.
+    static unsigned s_benchOrder = 0;
+    char theirs;
+    if (unguarded && (++s_benchOrder & 1)) {
+        const uint64_t tA = SelfBench::Now();
+        theirs = orig(pt, verts, count, axis);
+        const uint64_t tB = SelfBench::Now();
         ours = PointInPolyTest(pt, verts, count, axis);
-    } else if (!PointInPolyGuardedCall(pt, verts, count, axis, &ours, g_chPoly.caught)) {
-        return orig(pt, verts, count, axis);
+        SelfBench::Pair(g_chPoly.benchSlot, SelfBench::Now() - tB, tB - tA);
+    } else {
+        const uint64_t tOursA = SelfBench::Now();
+        if (unguarded) {
+            ours = PointInPolyTest(pt, verts, count, axis);
+        } else if (!PointInPolyGuardedCall(pt, verts, count, axis, &ours, g_chPoly.caught)) {
+            return orig(pt, verts, count, axis);
+        }
+        const uint64_t tOursB = SelfBench::Now();
+        theirs = orig(pt, verts, count, axis);
+        const uint64_t tTheirsB = SelfBench::Now();
+        if (unguarded)
+            SelfBench::Pair(g_chPoly.benchSlot, tOursB - tOursA, tTheirsB - tOursB);
     }
-    const uint64_t tOursB = SelfBench::Now();
-    const char theirs = orig(pt, verts, count, axis);
-    const uint64_t tTheirsB = SelfBench::Now();
-    if (unguarded)
-        SelfBench::Pair(g_chPoly.benchSlot, tOursB - tOursA, tTheirsB - tOursB);
     ++g_chPoly.verified;
     if (theirs & 0xFF) ++g_chPoly.hits;
 

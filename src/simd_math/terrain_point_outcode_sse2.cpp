@@ -115,11 +115,24 @@ static int __cdecl Hook_TerrainPointOutcode(const float* box, const float* pt) {
     ++g_fastCalls;
 
     if (g_calls <= kLearnCalls || (g_calls & kResampleMask) == 0) {
+        // Alternated, so neither half always meets the cold caches and the other the warm ones.
+        static unsigned s_benchOrder = 0;
+        int fast_result, client_result;
+        uint64_t fastCycles, clientCycles;
         const uint64_t t0 = SelfBench::Now();
-        int fast_result = Fast_TerrainPointOutcode(box, pt);
-        const uint64_t t1 = SelfBench::Now();
-        int client_result = g_orig(box, pt);
-        const uint64_t t2 = SelfBench::Now();
+        if (++s_benchOrder & 1) {
+            client_result = g_orig(box, pt);
+            const uint64_t t1 = SelfBench::Now();
+            fast_result = Fast_TerrainPointOutcode(box, pt);
+            fastCycles = SelfBench::Now() - t1;
+            clientCycles = t1 - t0;
+        } else {
+            fast_result = Fast_TerrainPointOutcode(box, pt);
+            const uint64_t t1 = SelfBench::Now();
+            client_result = g_orig(box, pt);
+            fastCycles = t1 - t0;
+            clientCycles = SelfBench::Now() - t1;
+        }
 
         ++g_verified;
 
@@ -131,7 +144,7 @@ static int __cdecl Hook_TerrainPointOutcode(const float* box, const float* pt) {
             return client_result;
         }
 
-        if (g_benchId >= 0) SelfBench::Pair(g_benchId, t1 - t0, t2 - t1);
+        if (g_benchId >= 0) SelfBench::Pair(g_benchId, fastCycles, clientCycles);
 
         return fast_result;
     }

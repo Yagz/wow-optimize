@@ -430,7 +430,7 @@ bool Init() {
 
     g_installed = true;
     SamplingProfiler::RegisterSelfSymbol("AnimQuatUnpack_SSE2", (const void*)&Hooked_TrackQuat);
-    g_benchSlot = SelfBench::Register("AnimQuatUnpack");
+    g_benchSlot = SelfBench::Register("AnimQuatUnpack", SelfBench::kTheirsFirst);
     Log("[AnimQuatUnpack] ACTIVE on sub_828680 (0x%08X), the bone rotation track, "
         "run once per animated bone per frame from the largest entry in the "
         "main-thread profile. Each keyframe is four uint16 expanded as v * K - "

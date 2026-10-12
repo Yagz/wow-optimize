@@ -277,17 +277,32 @@ int g_benchSlot = -1;
 
 static __declspec(noinline) int CompareVerify(void* a, void* b) {
     {
-        int mine;
-        const unsigned long long tA = SelfBench::Now();
-        __try {
-            mine = Compare(a, b);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            ++g_caught;
-            return orig_Compare(a, b);
+        // Alternated, so neither half always meets the cold caches and the other the warm ones.
+        static unsigned s_benchOrder = 0;
+        int mine, theirs;
+        if (++s_benchOrder & 1) {
+            const unsigned long long tA = SelfBench::Now();
+            theirs = orig_Compare(a, b);
+            const unsigned long long tB = SelfBench::Now();
+            __try {
+                mine = Compare(a, b);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                ++g_caught;
+                return theirs;
+            }
+            SelfBench::Pair(g_benchSlot, SelfBench::Now() - tB, tB - tA);
+        } else {
+            const unsigned long long tA = SelfBench::Now();
+            __try {
+                mine = Compare(a, b);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                ++g_caught;
+                return orig_Compare(a, b);
+            }
+            const unsigned long long tB = SelfBench::Now();
+            theirs = orig_Compare(a, b);
+            SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
         }
-        const unsigned long long tB = SelfBench::Now();
-        int theirs = orig_Compare(a, b);
-        SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
         g_verified++;
 
         // The client's comparator is a bool-returning predicate. Both of its

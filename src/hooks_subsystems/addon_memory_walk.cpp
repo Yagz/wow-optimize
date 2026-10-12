@@ -297,7 +297,7 @@ void Init() {
         return;
     }
 
-    g_benchId = SelfBench::Register("AddonMemoryWalk");
+    g_benchId = SelfBench::Register("AddonMemoryWalk", SelfBench::kTheirsFirst);
     SamplingProfiler::RegisterSelfSymbol("AddonMemoryWalk", (const void*)kTarget);
 
     Log("[AddonMemoryWalk] ACTIVE on the UpdateAddOnMemoryUsage object walk (sub_85B4E0 @ 0x%08X, %u learn calls "

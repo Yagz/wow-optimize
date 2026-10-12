@@ -117,13 +117,26 @@ static __declspec(noinline) uint8_t* VerifyWithClient(const uint8_t* src, size_t
         return r;
     }
 
-    const uint64_t t0 = SelfBench::Now();
-    uint8_t* const clientRet = g_orig(src, dst_len, g_verifyClientBuf);
-    const uint64_t clientCycles = SelfBench::Now() - t0;
-
-    const uint64_t t1 = SelfBench::Now();
-    uint8_t* const fastRet = DecompressFast(src, dst_len, g_verifyFastBuf);
-    const uint64_t fastCycles = SelfBench::Now() - t1;
+    // Alternated, so neither half always meets the cold caches and the other the warm ones.
+    static unsigned s_benchOrder = 0;
+    uint8_t* clientRet;
+    uint8_t* fastRet;
+    uint64_t clientCycles, fastCycles;
+    if (++s_benchOrder & 1) {
+        const uint64_t t0 = SelfBench::Now();
+        clientRet = g_orig(src, dst_len, g_verifyClientBuf);
+        const uint64_t t1 = SelfBench::Now();
+        fastRet = DecompressFast(src, dst_len, g_verifyFastBuf);
+        clientCycles = t1 - t0;
+        fastCycles = SelfBench::Now() - t1;
+    } else {
+        const uint64_t t0 = SelfBench::Now();
+        fastRet = DecompressFast(src, dst_len, g_verifyFastBuf);
+        const uint64_t t1 = SelfBench::Now();
+        clientRet = g_orig(src, dst_len, g_verifyClientBuf);
+        fastCycles = t1 - t0;
+        clientCycles = SelfBench::Now() - t1;
+    }
 
     if (!fastRet) {
         // One of the inputs the client treats differently. Nothing to compare:

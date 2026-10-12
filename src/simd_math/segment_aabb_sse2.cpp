@@ -241,17 +241,32 @@ static __declspec(noinline) int TestVerify(const float* box, const float* start,
         // The verification already runs both halves on the same input. Timing
         // it is the only paired comparison this project gets without asking a
         // tester to configure anything.
-        int mine;
-        const uint64_t tA = SelfBench::Now();
-        __try {
-            mine = Evaluate(box, start, end);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            ++g_caught;
-            return orig_Test(box, start, end);
+        // Alternated, so neither half always meets the cold caches and the other the warm ones.
+        static unsigned s_benchOrder = 0;
+        int mine, theirs;
+        if (++s_benchOrder & 1) {
+            const uint64_t tA = SelfBench::Now();
+            theirs = orig_Test(box, start, end);
+            const uint64_t tB = SelfBench::Now();
+            __try {
+                mine = Evaluate(box, start, end);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                ++g_caught;
+                return theirs;
+            }
+            SelfBench::Pair(g_benchSlot, SelfBench::Now() - tB, tB - tA);
+        } else {
+            const uint64_t tA = SelfBench::Now();
+            __try {
+                mine = Evaluate(box, start, end);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                ++g_caught;
+                return orig_Test(box, start, end);
+            }
+            const uint64_t tB = SelfBench::Now();
+            theirs = orig_Test(box, start, end);
+            SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
         }
-        const uint64_t tB = SelfBench::Now();
-        int theirs = orig_Test(box, start, end);
-        SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
         g_verified++;
 
         if (mine != theirs) {

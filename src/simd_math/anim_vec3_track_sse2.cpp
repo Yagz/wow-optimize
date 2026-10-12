@@ -349,7 +349,7 @@ bool Init() {
 
     g_installed = true;
     SamplingProfiler::RegisterSelfSymbol("AnimVec3Track_SSE2", (const void*)&Hooked_VecTrack);
-    g_benchSlot = SelfBench::Register("AnimVec3Track");
+    g_benchSlot = SelfBench::Register("AnimVec3Track", SelfBench::kTheirsFirst);
     Log("[AnimVec3Track] ACTIVE on sub_82B0A0 (0x%08X), the vector animation "
         "track. Eight call sites, six of them inside the largest entry in the "
         "main-thread profile, against one for the quaternion track already "

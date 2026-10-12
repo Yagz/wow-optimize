@@ -226,18 +226,31 @@ __declspec(safebuffers) static char __fastcall Hook_CollisionTriTest(void* self,
 
     const double threshold = (double)(*g_pThreshold);
 
+    // Verification check. On a verified call the two halves alternate which runs
+    // first, so neither always meets the cold caches and the other the warm ones.
+    const bool needVerify = (g_verified < kLearnCalls) || ((g_calls & kResampleMask) == 0);
+    static unsigned s_benchOrder = 0;
+    const bool clientFirst = needVerify && g_origFrustumTri && (++s_benchOrder & 1);
+    bool client_culled = false;
+    uint64_t clientCycles = 0;
+    if (clientFirst) {
+        const uint64_t tClient0 = (g_benchId >= 0) ? SelfBench::Now() : 0;
+        client_culled = g_origFrustumTri(pFrustum, v0, v1, v2);
+        clientCycles = (g_benchId >= 0) ? (SelfBench::Now() - tClient0) : 0;
+    }
+
     const uint64_t t0 = (g_benchId >= 0) ? SelfBench::Now() : 0;
     const bool fast_culled = Fast_TriangleFrustumCull(pFrustum, v0, v1, v2, threshold);
     const uint64_t fastCycles = (g_benchId >= 0) ? (SelfBench::Now() - t0) : 0;
 
     ++g_fastTests;
 
-    // Verification check:
-    const bool needVerify = (g_verified < kLearnCalls) || ((g_calls & kResampleMask) == 0);
     if (needVerify && g_origFrustumTri) {
-        const uint64_t tClient0 = (g_benchId >= 0) ? SelfBench::Now() : 0;
-        const bool client_culled = g_origFrustumTri(pFrustum, v0, v1, v2);
-        const uint64_t clientCycles = (g_benchId >= 0) ? (SelfBench::Now() - tClient0) : 0;
+        if (!clientFirst) {
+            const uint64_t tClient0 = (g_benchId >= 0) ? SelfBench::Now() : 0;
+            client_culled = g_origFrustumTri(pFrustum, v0, v1, v2);
+            clientCycles = (g_benchId >= 0) ? (SelfBench::Now() - tClient0) : 0;
+        }
 
         if (fast_culled != client_culled) {
             Retire("frustum cull decision mismatch", tri_idx, (int)fast_culled, (int)client_culled);

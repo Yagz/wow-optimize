@@ -236,7 +236,7 @@ namespace LuaSNewlstr {
         }
         
         g_installed = true;
-        g_benchSlot = SelfBench::Register("LuaStrIntern");
+        g_benchSlot = SelfBench::Register("LuaStrIntern", SelfBench::kOursFirst);
         Log("[luaS_newlstr] ACTIVE at 0x%08X - every string the client interns comes "
             "through here. The first %u finds are checked against the client's own "
             "answer and one in %u after that; the first different pointer retires it.",

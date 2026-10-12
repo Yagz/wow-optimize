@@ -199,14 +199,24 @@ int __fastcall Hooked_OverlapBody(const float* self, void* edx, const float* oth
     // cycle counter per call are the same order of cost as the work itself.
     // The two other modules with this harness already take them only here.
     if (!g_armed || (g_calls & kResampleMask) == 0) {
-        const uint64_t tA = SelfBench::Now();
-        const int mine = Sse2Overlap(self, other);
-        const uint64_t tB = SelfBench::Now();
         // The verification already runs both halves on the same input. Timing
         // it is the only paired comparison this project gets without asking a
         // tester to configure anything.
-        int theirs = orig_Overlap(self, edx, other);
-        SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
+        // Alternated, so neither half always meets the cold caches and the other the warm ones.
+        static unsigned s_benchOrder = 0;
+        int mine, theirs;
+        const uint64_t tA = SelfBench::Now();
+        if (++s_benchOrder & 1) {
+            theirs = orig_Overlap(self, edx, other);
+            const uint64_t tB = SelfBench::Now();
+            mine = Sse2Overlap(self, other);
+            SelfBench::Pair(g_benchSlot, SelfBench::Now() - tB, tB - tA);
+        } else {
+            mine = Sse2Overlap(self, other);
+            const uint64_t tB = SelfBench::Now();
+            theirs = orig_Overlap(self, edx, other);
+            SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
+        }
         g_verified++;
         if ((theirs != 0) != (mine != 0)) {
             g_dead = true;

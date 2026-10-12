@@ -660,7 +660,7 @@ bool Init() {
     }
     g_installed = true;
     g_abSubject = AbTest::IsSubject("ParticleFillFast", &g_abSubject);
-    g_benchSlot = SelfBench::Register("ParticleFillFast");
+    g_benchSlot = SelfBench::Register("ParticleFillFast", SelfBench::kOursFirst);
     g_evalBench = SelfBench::Register("ParticleEvalModel");
     g_evalReady = PrepareEvaluator();
     SamplingProfiler::RegisterSelfSymbol("ParticleFillFast", (const void*)&Detour);

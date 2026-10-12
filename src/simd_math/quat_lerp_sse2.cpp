@@ -256,14 +256,25 @@ __declspec(noinline) static float* VerifyQuatLerp(float* out, float t, const flo
     // so a session spent verifying behaves exactly like an unhooked one.
     float theirs[4];
     float mine[4];
+    // Alternated, so neither half always meets the cold caches and the other the warm ones.
+    static unsigned s_benchOrder = 0;
     __try {
-        const unsigned long long tA = SelfBench::Now();
-        orig_QuatLerp(out, t, a, b);
-        const unsigned long long tB = SelfBench::Now();
-        theirs[0] = out[0]; theirs[1] = out[1]; theirs[2] = out[2]; theirs[3] = out[3];
-        const unsigned long long tC = SelfBench::Now();
-        LerpNormalise(mine, t, a, b);
-        SelfBench::Pair(g_benchSlot, SelfBench::Now() - tC, tB - tA);
+        if (++s_benchOrder & 1) {
+            const unsigned long long tA = SelfBench::Now();
+            orig_QuatLerp(out, t, a, b);
+            const unsigned long long tB = SelfBench::Now();
+            theirs[0] = out[0]; theirs[1] = out[1]; theirs[2] = out[2]; theirs[3] = out[3];
+            const unsigned long long tC = SelfBench::Now();
+            LerpNormalise(mine, t, a, b);
+            SelfBench::Pair(g_benchSlot, SelfBench::Now() - tC, tB - tA);
+        } else {
+            const unsigned long long tA = SelfBench::Now();
+            LerpNormalise(mine, t, a, b);
+            const unsigned long long tB = SelfBench::Now();
+            orig_QuatLerp(out, t, a, b);
+            SelfBench::Pair(g_benchSlot, tB - tA, SelfBench::Now() - tB);
+            theirs[0] = out[0]; theirs[1] = out[1]; theirs[2] = out[2]; theirs[3] = out[3];
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Retire("the vector path faulted during verification");
         return out;

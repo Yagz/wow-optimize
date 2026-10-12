@@ -323,7 +323,8 @@ void LogStats() {
         const double avgFast = (double)g_fastCyclesTotal / g_timedPairs;
         const double avgClient = (double)g_clientCyclesTotal / g_timedPairs;
         const double speedup = (avgFast > 0.0) ? (avgClient / avgFast) : 1.0;
-        Log("[CollisionBoxTri] cycle timing (%u pairs): fast=%.1f cycles, client=%.1f cycles (%.2fx speedup)",
+        Log("[CollisionBoxTri] cycle timing (%u pairs): fast=%.1f cycles, client=%.1f cycles (%.2fx speedup). "
+            "Ours always runs first and meets the cold caches, so the ratio leans against ours.",
             g_timedPairs, avgFast, avgClient, speedup);
     }
 }

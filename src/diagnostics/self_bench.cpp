@@ -63,6 +63,7 @@ int g_refused = 0;
 
 struct Slot {
     const char* name;
+    Order order;
     // Plain 64-bit sums on a path that runs at most a few tens of thousands of
     // times a session, so the usual objection to a 64-bit counter on a hot path
     // does not apply here - this one is not hot.
@@ -96,10 +97,11 @@ constexpr uint64_t kAdaptiveFloor = 20000;
 
 }  // namespace
 
-int Register(const char* name) {
+int Register(const char* name, Order order) {
     if (g_count >= kMaxSlots) { ++g_refused; return -1; }
     const int id = g_count++;
     g_slot[id].name = name;
+    g_slot[id].order = order;
     return id;
 }
 
@@ -166,9 +168,11 @@ void LogStats() {
             snprintf(dropped, sizeof(dropped), " (%llu more pair(s) dropped as interruptions)",
                      (unsigned long long)s.discarded);
         Log("[SelfBench]   %-20s %7.1f cycles against %7.1f, %.2fx, over %llu "
-            "pairs%s",
+            "pairs%s%s",
             s.name, ours, theirs, theirs / ours,
-            (unsigned long long)s.pairs, dropped);
+            (unsigned long long)s.pairs, dropped,
+            s.order == kOursFirst   ? " - timed ours first, so the ratio leans against ours" :
+            s.order == kTheirsFirst ? " - timed the client first, so the ratio leans in favour of ours" : "");
         // The first pairs of a session are the first calls into code that is not in
         // the cache yet, and read as slower than the client for that reason: the
         // same four modules were flagged in every log on disk at a few hundred pairs
@@ -192,7 +196,10 @@ void LogStats() {
                 s.name, iOurs, iTheirs, iOurs > 0.0 ? iTheirs / iOurs : 0.0, ip);
         }
         if (theirs < ours) {
-            if (!haveInterval)
+            if (s.order == kOursFirst)
+                Log("[SelfBench]   %s reads slower than the code it replaces, but ours always runs first and "
+                    "meets the cold caches, so this is not a verdict.", s.name);
+            else if (!haveInterval)
                 Log("[SelfBench]   %s reads slower than the code it replaces over %llu pairs since the "
                     "session began; no verdict until a report has an interval of its own with enough "
                     "pairs, because the first calls run cold.",
