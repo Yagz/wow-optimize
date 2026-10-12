@@ -218,6 +218,14 @@ namespace WowOptimizeLauncher {
             // TRY THE UNPROVEN ONES turns them on.
             "M2AnimReuse", "CollisionFaceClip",
 
+            // Measured slower than the client's own fill on the same input, by its
+            // own check, in a field session on a modified client: 1.07x over the
+            // last 52897 pairs and 1.12x over the session, and the particle
+            // evaluator model inside it 1.87x. One switch owns both. A replacement
+            // that costs more than it replaces has no case; take it out of this
+            // list to put it back.
+            "ParticleFillFast",
+
             // Computes a distance and a speed in single precision where the client
             // uses x87 at 53 bits, and writes the distance into a client global.
             // Its own header says the size of the difference has not been measured,
