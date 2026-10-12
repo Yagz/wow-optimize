@@ -2451,11 +2451,11 @@ static int __cdecl Hooked_TableConcat(lua_State* L) {
         char* p = buf;
         for (int i = 0; i < count; i++) {
             RawTValue* val = (RawTValue*)luaH_getnum_(tablePtr, start + i);
-            if (!val || val->tt != LUA_TSTRING) { mi_free(buf); g_tblConcatFallbacks++; return orig_tbl_concat(L); }
+            if (!val || val->tt != LUA_TSTRING) { mi_free_size(buf, totalLen + 1); g_tblConcatFallbacks++; return orig_tbl_concat(L); }
 
             // SAFETY: validate GC string object before direct memory read
             uintptr_t gcPtr = (uintptr_t)val->value.gc;
-            if (gcPtr < 0x10000 || gcPtr >= 0xFFE00000) { mi_free(buf); g_tblConcatFallbacks++; return orig_tbl_concat(L); }
+            if (gcPtr < 0x10000 || gcPtr >= 0xFFE00000) { mi_free_size(buf, totalLen + 1); g_tblConcatFallbacks++; return orig_tbl_concat(L); }
 
             // Note: no re-check of the string type here. Pass 1 (above) already
             // validated val->tt == LUA_TSTRING for every element via the TValue's
@@ -2466,7 +2466,7 @@ static int __cdecl Hooked_TableConcat(lua_State* L) {
             // spurious fallback (GitHub issue #37).
 
             size_t slen = *(uint32_t*)(gcPtr + 16);      // len is at offset +16
-            if (slen == 0 || slen > 32768) { mi_free(buf); g_tblConcatFallbacks++; return orig_tbl_concat(L); }
+            if (slen == 0 || slen > 32768) { mi_free_size(buf, totalLen + 1); g_tblConcatFallbacks++; return orig_tbl_concat(L); }
 
             const char* sdata = (const char*)(gcPtr + 20); // str[0] is at offset +20
 
@@ -2474,7 +2474,7 @@ static int __cdecl Hooked_TableConcat(lua_State* L) {
                 memcpy(p, sdata, slen);
             }
             __except(EXCEPTION_EXECUTE_HANDLER) {
-                mi_free(buf); g_tblConcatFallbacks++; return orig_tbl_concat(L);
+                mi_free_size(buf, totalLen + 1); g_tblConcatFallbacks++; return orig_tbl_concat(L);
             }
             p += slen;
 
@@ -2487,7 +2487,7 @@ static int __cdecl Hooked_TableConcat(lua_State* L) {
 
         // Intern string
         void* ts = luaS_newlstr_(L, buf, totalLen);
-        mi_free(buf);
+        mi_free_size(buf, totalLen + 1);
         if (!ts) { g_tblConcatFallbacks++; return orig_tbl_concat(L); }
 
         // Push result
@@ -3018,7 +3018,7 @@ static int __cdecl Hooked_StrRep(lua_State* L) {
     *p = '\0';
 
     lua_pushstring_(L, buf);
-    mi_free(buf);
+    mi_free_size(buf, totalLen + 1);
     g_strRepHits++;
     return 1;
 }

@@ -226,11 +226,20 @@ endif()
 FetchContent_Declare(
     mimalloc
     GIT_REPOSITORY https://github.com/microsoft/mimalloc.git
-    GIT_TAG        v3.3.2
+    GIT_TAG        v3.5.3
 )
 set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE)
 set(MI_OVERRIDE     OFF CACHE BOOL "" FORCE)
+# Since v3.5.2 a release build counts detailed statistics and carries sampled
+# profiling hooks unless told otherwise. Both add work to every allocation and
+# free, and nothing in this DLL reads either: mi_process_info asks the OS. They
+# were compiled out in v3.3.2, and they stay out. MI_OPT_ARCH is already off for
+# 32-bit x86 by default; it is pinned so a later default cannot turn on
+# /arch:AVX2 for players whose CPUs lack it.
+set(MI_STATS        OFF CACHE STRING "" FORCE)
+set(MI_PROFILE      OFF CACHE STRING "" FORCE)
+set(MI_OPT_ARCH     OFF CACHE STRING "" FORCE)
 FetchContent_MakeAvailable(mimalloc)
 
 # === Main optimization DLL ===
