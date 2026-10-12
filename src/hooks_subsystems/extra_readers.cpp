@@ -72,6 +72,7 @@ const unsigned char kWorkerOpening[12] = { 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x08, 0
 int g_state = 0;            // 0 waiting, 1 started, 2 declined
 int g_waitedFrames = 0;
 void* g_thread = nullptr;
+void* g_thread3 = nullptr;  // the third reader, under General/ExtraReaderThird
 
 typedef void* (__cdecl* StartThread_fn)(int queue, const char* name);
 
@@ -116,11 +117,25 @@ void OnFrame() {
     Log("[ExtraReaders] ACTIVE: a second reader thread (CAsyncThread %p) serves the client's asynchronous file queue. "
         "Requests are still taken one at a time under the queue's lock. The Load took lines with the switch on and off "
         "are the measurement.", g_thread);
+
+    // A third on the same queue. In the rig, on 3923 real files, one reader took 1727 ms,
+    // two 1074 and three 908: another 15% after the second. Off by default until a field
+    // load has run with it; the question of completion order is the same as for the second,
+    // with one more thread that can overtake.
+    if (Config::g_settings.OptExtraReaderThird) {
+        g_thread3 = ((StartThread_fn)kStartThread)(queue, "AsyncRead3");
+        if (g_thread3)
+            Log("[ExtraReaders] a third reader thread (CAsyncThread %p) serves the same queue.", g_thread3);
+        else
+            Log("[ExtraReaders] the third reader thread was asked for and the client's routine returned nothing; "
+                "two readers run.");
+    }
 }
 
 void LogStats() {
     if (!Config::g_settings.OptExtraReaderThread) return;
-    if (g_state == 1) Log("[ExtraReaders] a second reader thread has been running since the reader appeared.");
+    if (g_state == 1) Log("[ExtraReaders] %s reader thread(s) of our own running since the reader appeared: %s.",
+                          g_thread3 ? "two" : "one", g_thread3 ? "the second and the third" : "the second");
     else if (g_state == 2) Log("[ExtraReaders] not running; the reason is logged where it was decided.");
     else Log("[ExtraReaders] waiting for the client's reader queue.");
 }
