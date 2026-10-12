@@ -20,6 +20,9 @@
 namespace ClientIdle {
 
 __declspec(selectany) volatile LONG g_sleeps = 0;   // plain increment, main thread only
+// Set once the Sleep hook that counts them is installed. Without it the count stays
+// at zero whatever the client does, and a report must say "not seen", not "none".
+__declspec(selectany) volatile LONG g_measured = 0;
 
 inline bool IsIdleSleepCaller(uintptr_t ret) {
     return ret == 0x004A8B27 || ret == 0x004A8B4A;

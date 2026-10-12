@@ -474,7 +474,10 @@ void Report(const char* reason) {
         Log("[FrameBench]   %llu frame(s) were left out because the game window was not in "
             "focus, where the client locks itself to 30 frames a second. They are not in any "
             "figure here.", (unsigned long long)g_background);
-    if (g_clientIdle)
+    if (!ClientIdle::g_measured)
+        Log("[FrameBench]   the client's nothing-to-draw sleep could not be seen (the Sleep hook is not "
+            "installed), so any minimised or device-not-ready stretch is inside the figures above.");
+    else if (g_clientIdle)
         Log("[FrameBench]   %llu frame(s) were left out because the client had nothing to draw "
             "(minimised window or device not ready) and slept instead. They are not in any figure "
             "here.", (unsigned long long)g_clientIdle);

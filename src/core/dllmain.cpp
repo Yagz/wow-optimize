@@ -2628,6 +2628,7 @@ static bool InstallSleepHook() {
             "Special K). Its detour stays in the chain behind this one.", (unsigned)(uintptr_t)p);
     }
     Log("Sleep hook: ACTIVE (PreciseSleep: %s, RDTSC %.1f MHz + Lua GC + combat log)", Config::g_settings.OptSleepPrecision ? "ENABLED" : "DISABLED", g_rdtscFreqMhz);
+    InterlockedExchange(&ClientIdle::g_measured, 1);
     return true;
 }
 

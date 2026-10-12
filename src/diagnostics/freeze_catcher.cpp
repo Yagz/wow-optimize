@@ -117,6 +117,8 @@ volatile LONG g_count = 0;       // samples in the current armed window
 unsigned long g_frames   = 0;
 unsigned long g_caught   = 0;    // frames that armed it
 unsigned long g_idleFrames = 0;  // armed, but the client was in its nothing-to-draw sleep
+unsigned long g_idleRunFrames = 0;   // the run of them in progress
+long          g_idleRunMs = 0;
 unsigned long g_samples  = 0;
 unsigned long g_worstMs  = 0;
 unsigned long g_wakes    = 0;
@@ -623,7 +625,21 @@ void OnFrame() {
     const LONG n = InterlockedExchange(&g_count, 0);
     if (n > 0 && len >= kArmMs && idle) {
         ++g_idleFrames;
-    } else if (n > 0 && len >= kArmMs) {
+        ++g_idleRunFrames;
+        g_idleRunMs += len;
+    } else {
+        // A run of them ended. One line keeps a stretch the player may have seen as
+        // a pause - a device that was not ready inside the game, not only a
+        // minimised window - visible without writing up every quarter second of it.
+        if (g_idleRunFrames) {
+            Log("[FreezeCatcher] the client drew nothing for %lu frame(s), %ld ms in all, ending now "
+                "(minimised window or device not ready); not written up frame by frame.",
+                g_idleRunFrames, g_idleRunMs);
+            g_idleRunFrames = 0;
+            g_idleRunMs = 0;
+        }
+    }
+    if (n > 0 && len >= kArmMs && !idle) {
         ++g_caught;
         g_samples += (unsigned long)(n < kRing ? n : kRing);
         if ((unsigned long)len > g_worstMs) g_worstMs = (unsigned long)len;
@@ -694,9 +710,13 @@ void LogStats() {
             "measured.");
         return;
     }
-    Log("[FreezeCatcher] %lu frame(s) over %ld ms were the client sleeping because it had nothing "
-        "to draw (minimised window or device not ready) and are not written up below.",
-        g_idleFrames, kArmMs);
+    if (ClientIdle::g_measured)
+        Log("[FreezeCatcher] %lu frame(s) over %ld ms were the client sleeping because it had nothing "
+            "to draw (minimised window or device not ready); each run of them has one summary line "
+            "instead of a write-up.", g_idleFrames, kArmMs);
+    else
+        Log("[FreezeCatcher] the client's nothing-to-draw sleep could not be seen (the Sleep hook is not "
+            "installed), so those frames, if any, are written up with the others.");
     if (g_caught == 0) {
         Log("[FreezeCatcher] %lu frames watched over %lu wake-ups and none of "
             "them ran past %ld ms. Measured and zero: there was nothing to "
