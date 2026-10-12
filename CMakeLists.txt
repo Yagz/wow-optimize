@@ -69,12 +69,158 @@ include(FetchContent)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
 # MinHook — lightweight function hooking library
+#
+# Pinned to the commit every build so far has used, instead of master, so a
+# fresh clone builds the same hooking code and the edit below always finds the
+# line it replaces.
 FetchContent_Declare(
     minhook
     GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-    GIT_TAG        master
+    GIT_TAG        8af6b4acae5a9388fd742b56fa79ece89d96f823
 )
 FetchContent_MakeAvailable(minhook)
+
+# MinHook freezes every other thread of the process before it writes a hook, and
+# finds them with CreateToolhelp32Snapshot, which copies every thread on the
+# machine into a section; Thread32Next then maps and unmaps a view of it once per
+# thread. In the rig one batched install of the Lua hooks at login spent about
+# 90 ms of a 326 ms frame there, and every later freeze (a hook enabled or
+# disabled at run time) pays the same, more on a machine with a browser open.
+# The replacement below asks NtQuerySystemInformation once and reads only this
+# process's threads. It checks itself - the calling thread must be in the list it
+# read - and falls back to MinHook's own snapshot when it is not, when the call
+# fails, or on anything but x86. Applied once; the marker comment makes it a no-op
+# on the next configure.
+set(_wo_mh_hook "${minhook_SOURCE_DIR}/src/hook.c")
+file(READ "${_wo_mh_hook}" _wo_mh_src)
+string(FIND "${_wo_mh_src}" "wow_optimize: thread list" _wo_mh_done)
+if(_wo_mh_done EQUAL -1)
+    string(FIND "${_wo_mh_src}" "static BOOL EnumerateThreads(PFROZEN_THREADS pThreads)" _wo_mh_at)
+    if(_wo_mh_at EQUAL -1)
+        message(WARNING "MinHook's EnumerateThreads was not found in hook.c; it keeps its own snapshot-based thread list.")
+    else()
+        set(_wo_mh_new [==[static BOOL EnumerateThreadsToolhelp(PFROZEN_THREADS pThreads);
+
+/* wow_optimize: thread list from one NtQuerySystemInformation call, see CMakeLists.txt. */
+static BOOL WoAddThread(PFROZEN_THREADS pThreads, DWORD tid)
+{
+    if (pThreads->pItems == NULL)
+    {
+        pThreads->capacity = INITIAL_THREAD_CAPACITY;
+        pThreads->pItems = (LPDWORD)HeapAlloc(g_hHeap, 0, pThreads->capacity * sizeof(DWORD));
+        if (pThreads->pItems == NULL)
+            return FALSE;
+    }
+    else if (pThreads->size >= pThreads->capacity)
+    {
+        LPDWORD p;
+        pThreads->capacity *= 2;
+        p = (LPDWORD)HeapReAlloc(g_hHeap, 0, pThreads->pItems, pThreads->capacity * sizeof(DWORD));
+        if (p == NULL)
+            return FALSE;
+        pThreads->pItems = p;
+    }
+    pThreads->pItems[pThreads->size++] = tid;
+    return TRUE;
+}
+
+typedef LONG (NTAPI *WO_NTQSI)(ULONG, PVOID, ULONG, PULONG);
+
+static BOOL EnumerateThreads(PFROZEN_THREADS pThreads)
+{
+#if defined(_M_IX86)
+    /* x86 SYSTEM_PROCESS_INFORMATION: UniqueProcessId at 0x44, 0xB8 bytes, then
+       SYSTEM_THREAD_INFORMATION entries of 0x40 bytes with ClientId.UniqueThread at 0x24. */
+    static WO_NTQSI s_query = NULL;
+    static BOOL s_looked = FALSE;
+    ULONG size = 512 * 1024;
+    ULONG needed = 0;
+    LPBYTE buf = NULL;
+    LONG st = -1;
+    int tries;
+    if (!s_looked)
+    {
+        HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+        s_query = nt ? (WO_NTQSI)GetProcAddress(nt, "NtQuerySystemInformation") : NULL;
+        s_looked = TRUE;
+    }
+    if (s_query == NULL)
+        return EnumerateThreadsToolhelp(pThreads);
+    for (tries = 0; tries < 4; ++tries)
+    {
+        buf = (LPBYTE)HeapAlloc(g_hHeap, 0, size);
+        if (buf == NULL)
+            return EnumerateThreadsToolhelp(pThreads);
+        st = s_query(5 /* SystemProcessInformation */, buf, size, &needed);
+        if (st >= 0)
+            break;
+        HeapFree(g_hHeap, 0, buf);
+        buf = NULL;
+        if (st != (LONG)0xC0000004 /* STATUS_INFO_LENGTH_MISMATCH */)
+            return EnumerateThreadsToolhelp(pThreads);
+        size = (needed > size ? needed : size * 2) + 64 * 1024;
+    }
+    if (buf == NULL)
+        return EnumerateThreadsToolhelp(pThreads);
+    {
+        const DWORD pid  = GetCurrentProcessId();
+        const DWORD self = GetCurrentThreadId();
+        ULONG off = 0;
+        BOOL found = FALSE, sawSelf = FALSE, ok = TRUE;
+        for (;;)
+        {
+            LPBYTE p = buf + off;
+            if (off + 0xB8 > size)
+                break;
+            if ((DWORD)(ULONG_PTR)*(HANDLE*)(p + 0x44) == pid)
+            {
+                const ULONG n = *(ULONG*)(p + 4);
+                ULONG i;
+                found = TRUE;
+                if (off + 0xB8 + n * 0x40 > size)
+                {
+                    ok = FALSE;
+                    break;
+                }
+                for (i = 0; i < n && ok; ++i)
+                {
+                    const DWORD tid = (DWORD)(ULONG_PTR)*(HANDLE*)(p + 0xB8 + i * 0x40 + 0x24);
+                    if (tid == self)
+                    {
+                        sawSelf = TRUE;
+                        continue;
+                    }
+                    ok = WoAddThread(pThreads, tid);
+                }
+                break;
+            }
+            if (*(ULONG*)p == 0)
+                break;
+            off += *(ULONG*)p;
+        }
+        HeapFree(g_hHeap, 0, buf);
+        if (found && sawSelf && ok)
+            return TRUE;
+        if (pThreads->pItems != NULL)
+        {
+            HeapFree(g_hHeap, 0, pThreads->pItems);
+            pThreads->pItems = NULL;
+        }
+        pThreads->size = 0;
+        pThreads->capacity = 0;
+    }
+#endif
+    return EnumerateThreadsToolhelp(pThreads);
+}
+
+]==])
+        string(REPLACE "static BOOL EnumerateThreads(PFROZEN_THREADS pThreads)"
+                       "${_wo_mh_new}static BOOL EnumerateThreadsToolhelp(PFROZEN_THREADS pThreads)"
+                       _wo_mh_src "${_wo_mh_src}")
+        file(WRITE "${_wo_mh_hook}" "${_wo_mh_src}")
+        message(STATUS "MinHook: thread enumeration replaced with NtQuerySystemInformation (falls back to the snapshot)")
+    endif()
+endif()
 
 # mimalloc — Microsoft's high-performance allocator
 FetchContent_Declare(
