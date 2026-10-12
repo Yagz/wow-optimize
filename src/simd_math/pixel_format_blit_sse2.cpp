@@ -19,6 +19,7 @@
 
 #include "pixel_format_blit_sse2.h"
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <emmintrin.h>
 #include "config.h"
@@ -194,6 +195,45 @@ static __declspec(noinline) void* VerifyWithClient(void* dst, const void* src, c
     const uint64_t fastCycles = SelfBench::Now() - t1;
 
     if (std::memcmp(g_verifyClientBuf, g_verifyFastBuf, byteSize) != 0) {
+        // The retire line below names no format, so a tester's log could say
+        // that this module disagreed with the client and nothing about where.
+        // Where the first differing byte falls tells a wrong channel mapping
+        // (inside the pixels, on every row) from a difference in the stride
+        // padding (past the width), and the arguments say which call it was.
+        size_t first = 0, differing = 0;
+        for (size_t i = 0; i < byteSize; ++i) {
+            if (g_verifyClientBuf[i] != g_verifyFastBuf[i]) {
+                if (!differing) first = i;
+                ++differing;
+            }
+        }
+        const size_t stride = dst_stride > 0 ? (size_t)dst_stride : 1;
+        const unsigned row = (unsigned)(first / stride);
+        const unsigned col = (unsigned)(first % stride);
+        const unsigned px  = col / 2;                      // the destination is 16 bits a pixel
+        const bool inPixels = (int)px < dim[0] && src_stride > 0;
+        char srcText[16] = "n/a";
+        if (inPixels) {
+            uint32_t srcPixel = 0;
+            std::memcpy(&srcPixel, (const uint8_t*)src + (size_t)row * (size_t)src_stride + (size_t)px * 4u, 4);
+            _snprintf(srcText, sizeof(srcText) - 1, "0x%08X", (unsigned)srcPixel);
+            srcText[sizeof(srcText) - 1] = 0;
+        }
+        uint16_t clientWord = 0, oursWord = 0;
+        const size_t w = first & ~(size_t)1;
+        if (w + 2 <= byteSize) {
+            std::memcpy(&clientWord, g_verifyClientBuf + w, 2);
+            std::memcpy(&oursWord, g_verifyFastBuf + w, 2);
+        }
+        Log("[PixelFormatBlit] disagreement on call %llu: %d x %d, src stride %d, dst stride %d, "
+            "arguments a6..a13 = %d %d %d %d %d %d %d %d. %u of %u bytes differ; the first is "
+            "row %u, byte %u of the row (%s), client word 0x%04X, ours 0x%04X, "
+            "source bytes there %s.",
+            (unsigned long long)g_calls, dim[0], dim[1], src_stride, dst_stride,
+            a6, a7, a8, a9, a10, a11, a12, a13,
+            (unsigned)differing, (unsigned)byteSize, row, col,
+            inPixels ? "inside the pixels" : "in the stride padding",
+            (unsigned)clientWord, (unsigned)oursWord, srcText);
         Retire("pixel buffer mismatch against client blit");
         std::memcpy(dst, g_verifyClientBuf, byteSize);
         return dst;
