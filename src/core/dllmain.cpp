@@ -194,7 +194,6 @@
 #include "collision_reset_visited.h"
 #include "ui_strata_compact_sse2.h"
 #include "dbc_fast_rle.h"
-#include "pixel_format_blit_sse2.h"
 #include "ui_frame_remove.h"
 
 // Forward declaration - Log() defined later in this file
@@ -6061,7 +6060,6 @@ static void DumpPeriodicStats(const char* why, bool atProcessExit) {
     STAT_TIME("CollisionResetVisited::LogStats", CollisionResetVisited::LogStats());
     STAT_TIME("UIStrataCompact::LogStats", UIStrataCompact::LogStats());
     STAT_TIME("DbcFastRle::LogStats", DbcFastRle::LogStats());
-    STAT_TIME("PixelFormatBlit::LogStats", PixelFormatBlit::LogStats());
     STAT_TIME("UIFrameRemove::LogStats", UIFrameRemove::LogStats());
     STAT_TIME("ParticleQuad::LogStats", ParticleQuad::LogStats());
     STAT_TIME("ParallelParticles::LogStats", ParallelParticles::LogStats());
@@ -8848,7 +8846,6 @@ static DWORD WINAPI MainThread(LPVOID param) {
     CollisionResetVisited::Init();
     UIStrataCompact::Init();
     DbcFastRle::Init();
-    PixelFormatBlit::Init();
     UIFrameRemove::Init();
     ParticleQuad::Init();
     ParallelParticles::Init();
@@ -11892,7 +11889,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
             CollisionResetVisited::Shutdown();
             UIStrataCompact::Shutdown();
             DbcFastRle::Shutdown();
-            PixelFormatBlit::Shutdown();
             UIFrameRemove::Shutdown();
             ParticleQuad::Shutdown();
             ParallelParticles::Shutdown();

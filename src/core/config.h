@@ -708,7 +708,6 @@ namespace Config {
         bool OptCollisionResetVisited = true;
         bool OptUIStrataCompact = true;
         bool OptDbcFastRle = true;
-        bool OptPixelFormatBlit = false;
         bool OptUIFrameRemove = true;
         bool OptM2BatchCmpTransparent = true;
         bool OptM2BatchCmpSolid = true;

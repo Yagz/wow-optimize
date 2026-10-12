@@ -212,10 +212,10 @@ namespace WowOptimizeLauncher {
             // and neither has been seen to arm and pay in a session. M2AnimReuse got
             // two different bone arrays for the same model and arguments and retired
             // itself, and CollisionFaceClip retires on its second verified call with
-            // a real disagreement. AnimSplineTrack, PixelFormatBlit and
-            // SkyTextureReuse used to be here too, with no recorded reason beyond
-            // having no measured gain; a session that only tries what is proven
-            // would never give them one, so TRY THE UNPROVEN ONES turns them on.
+            // a real disagreement. AnimSplineTrack and SkyTextureReuse used to be
+            // here too, with no recorded reason beyond having no measured gain; a
+            // session that only tries what is proven would never give them one, so
+            // TRY THE UNPROVEN ONES turns them on.
             "M2AnimReuse", "CollisionFaceClip",
 
             // Computes a distance and a speed in single precision where the client
@@ -906,7 +906,6 @@ namespace WowOptimizeLauncher {
                 { "Collision Query Reset Visited (sub_7C7610)", new SettingItem("Graphics_Sound", "CollisionResetVisited", true, null, "Replaces per-iteration global writes and pointer reloads with a hoisted 4-way unrolled clearing pass in sub_7C7610 (2.72% of executing time in field sessions).") },
                 { "UI Strata List Compaction (SSE2)", new SettingItem("UI_Lua", "UIStrataCompact", true, null, "Vectorizes UI strata frame pointer array compaction in sub_495060, removing 4 pointers per SSE2 step with bitmask compression.") },
                 { "DBC Fast RLE / Copy Unpack", new SettingItem("General", "DbcFastRle", true, null, "Optimizes DBC string and integer array unrolling in sub_4CFBB0 with 16-byte aligned vector copies and precomputed offsets.") },
-                { "ARGB Pixel Format Blit Converter (SSE2)", new SettingItem("Graphics_Sound", "PixelFormatBlit", false, null, "Vectorizes 32-bpp ARGB and RGBA pixel format unpacking and color channel conversion in sub_6ABC20 using SSE2 shuffles.", true) },
                 { "UI Frame Removal Fast Scan", new SettingItem("UI_Lua", "UIFrameRemove", true, null, "Accelerates UI frame removal and parent unlinking in sub_491160 using vectorized 16-byte pointer search and compact memmove.") },
                 { "Particle Billboard Quad (sub_97BE80)", new SettingItem("Graphics_Sound", "ParticleQuad", false, null, "Replaces 365 instructions of serialized x87 trigonometry and quad vertex generation in sub_97BE80 (billboard particle vertex calculations, hot in combat profiles) with bit-exact double precision quad generation and branchless AABB updates. Its startup self-test fails on the clients logged so far (one value differs by one bit), so it does not install.", true) },
                 { "Particle Quad Fill (sub_97BE80)", new SettingItem("Graphics_Sound", "ParticleFillFast", false, null, "Replaces the client's per-particle vertex fill for flat, axis-placed and spinning quads. The client does it as about a thousand floating point stack instructions a particle: four corner positions, six bounding box compare-and-branch groups a corner, and four vertex streams. This does the same arithmetic in SSE2 doubles at the client's rounding, inlines two small client calls, and skips one that works out two values these emitters never read. Checked offline against the client's own instruction sequence over many millions of random emitters and particles with no difference found. In the game the first ten thousand fills of each kind are worked out into private buffers, run by the client, and compared byte for byte, one in 4096 after that, and the first difference switches it off for the session. Not yet run in a game.", true) },

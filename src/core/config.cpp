@@ -234,7 +234,6 @@ static const BoolSetting kBoolSettings[] = {
     { "Graphics_Sound", "CollisionResetVisited", &Settings::OptCollisionResetVisited },
     { "UI_Lua", "UIStrataCompact", &Settings::OptUIStrataCompact },
     { "General", "DbcFastRle", &Settings::OptDbcFastRle },
-    { "Graphics_Sound", "PixelFormatBlit", &Settings::OptPixelFormatBlit },
     { "UI_Lua", "UIFrameRemove", &Settings::OptUIFrameRemove },
     { "Graphics_Sound", "M2BatchCmpTransparent", &Settings::OptM2BatchCmpTransparent },
     { "Graphics_Sound", "M2BatchCmpSolid", &Settings::OptM2BatchCmpSolid },
@@ -902,7 +901,6 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         g_settings.OptCollisionResetVisited = GetPrivateProfileIntA("Graphics_Sound", "CollisionResetVisited", 1, iniPath.c_str()) != 0;
         g_settings.OptUIStrataCompact      = GetPrivateProfileIntA("UI_Lua", "UIStrataCompact", 1, iniPath.c_str()) != 0;
         g_settings.OptDbcFastRle           = GetPrivateProfileIntA("General", "DbcFastRle", 1, iniPath.c_str()) != 0;
-        g_settings.OptPixelFormatBlit      = GetPrivateProfileIntA("Graphics_Sound", "PixelFormatBlit", 0, iniPath.c_str()) != 0;
         g_settings.OptUIFrameRemove        = GetPrivateProfileIntA("UI_Lua", "UIFrameRemove", 1, iniPath.c_str()) != 0;
         g_settings.OptM2BatchCmpTransparent = GetPrivateProfileIntA("Graphics_Sound", "M2BatchCmpTransparent", 1, iniPath.c_str()) != 0;
         g_settings.OptM2BatchCmpSolid       = GetPrivateProfileIntA("Graphics_Sound", "M2BatchCmpSolid", 1, iniPath.c_str()) != 0;
