@@ -130,6 +130,7 @@
 #include "../diagnostics/file_attr_census.h"
 #include "../diagnostics/sleep_census.h"
 #include "parallel_particles.h"
+#include "m2_parallel_roots.h"
 #include "shader_const_dedup_sse2.h"
 #include "batch_colour_convert.h"
 #include "floor_split_sse2.h"
@@ -6071,6 +6072,7 @@ static void DumpPeriodicStats(const char* why, bool atProcessExit) {
     STAT_TIME("UIFrameRemove::LogStats", UIFrameRemove::LogStats());
     STAT_TIME("ParticleQuad::LogStats", ParticleQuad::LogStats());
     STAT_TIME("ParallelParticles::LogStats", ParallelParticles::LogStats());
+    STAT_TIME("M2ParallelRoots::LogStats", M2ParallelRoots::LogStats());
     STAT_TIME("ParticleFillFast::LogStats", ParticleFillFast::LogStats());
     STAT_TIME("ParticleLoopPrefetch::LogStats", ParticleLoopPrefetch::LogStats());
     STAT_TIME("AddonMemoryWalk::LogStats", AddonMemoryWalk::LogStats());
@@ -8857,6 +8859,7 @@ static DWORD WINAPI MainThread(LPVOID param) {
     UIFrameRemove::Init();
     ParticleQuad::Init();
     ParallelParticles::Init();
+    M2ParallelRoots::Init();
     ParticleFillFast::Init();
     ParticleLoopPrefetch::Init();
     AddonMemoryWalk::Init();

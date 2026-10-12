@@ -727,6 +727,8 @@ add_library(wow_optimize SHARED
     src/diagnostics/sleep_census.h
     src/hooks_subsystems/parallel_particles.cpp
     src/hooks_subsystems/parallel_particles.h
+    src/hooks_subsystems/m2_parallel_roots.cpp
+    src/hooks_subsystems/m2_parallel_roots.h
     src/simd_math/horizon_test_sse2.cpp
     src/simd_math/horizon_test_sse2.h
     src/simd_math/m2_skin_proj_fast.cpp

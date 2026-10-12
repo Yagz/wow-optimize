@@ -240,6 +240,7 @@ static const BoolSetting kBoolSettings[] = {
     { "Graphics_Sound", "M2BatchCmpSolid", &Settings::OptM2BatchCmpSolid },
     { "Graphics_Sound", "ParticleQuad", &Settings::OptParticleQuad },
     { "Graphics_Sound", "ParallelParticles", &Settings::OptParallelParticles },
+    { "Graphics_Sound", "M2ParallelRoots", &Settings::OptM2ParallelRoots },
     { "Graphics_Sound", "ParticleFillFast", &Settings::OptParticleFillFast },
     { "Graphics_Sound", "ParticleLoopPrefetch", &Settings::OptParticleLoopPrefetch },
     { "UI_Lua", "AddonMemoryWalk", &Settings::OptAddonMemoryWalk },
@@ -908,6 +909,7 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         g_settings.OptM2BatchCmpSolid       = GetPrivateProfileIntA("Graphics_Sound", "M2BatchCmpSolid", 1, iniPath.c_str()) != 0;
         g_settings.OptParticleQuad         = GetPrivateProfileIntA("Graphics_Sound", "ParticleQuad", 0, iniPath.c_str()) != 0;
         g_settings.OptParallelParticles    = GetPrivateProfileIntA("Graphics_Sound", "ParallelParticles", 0, iniPath.c_str()) != 0;
+        g_settings.OptM2ParallelRoots      = GetPrivateProfileIntA("Graphics_Sound", "M2ParallelRoots", 0, iniPath.c_str()) != 0;
         g_settings.OptParticleFillFast     = GetPrivateProfileIntA("Graphics_Sound", "ParticleFillFast", 0, iniPath.c_str()) != 0;
         g_settings.OptParticleLoopPrefetch = GetPrivateProfileIntA("Graphics_Sound", "ParticleLoopPrefetch", 0, iniPath.c_str()) != 0;
         g_settings.OptAddonMemoryWalk = GetPrivateProfileIntA("UI_Lua", "AddonMemoryWalk", 0, iniPath.c_str()) != 0;

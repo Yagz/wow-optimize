@@ -714,6 +714,7 @@ namespace Config {
         bool OptM2BatchCmpSolid = true;
         bool OptParticleQuad = false;
         bool OptParallelParticles = false;
+        bool OptM2ParallelRoots = false;
         bool OptParticleFillFast = false;
         bool OptParticleLoopPrefetch = false;
         bool OptAddonMemoryWalk = false;
