@@ -986,6 +986,26 @@ bool OnRenderThread() {
     return tid != 0 && GetCurrentThreadId() == tid;
 }
 
+unsigned long RenderThreadId() {
+    return g_renderTid;
+}
+
+// For the freeze watchdog, called from its own thread while the main thread is
+// stalled. Every field is read with no lock, so a figure can be one command or
+// one frame stale; nothing here is used for a decision.
+void LogStallState() {
+    const Ring& R = g_ring;
+    const uint32_t wr = R.wr, pub = R.pub, rd = R.rd;
+    Log("!!!     [GxRT] active=%ld dead=%ld  ring bytes: written-not-published %u, "
+        "published-not-consumed %u, render thread %s",
+        (long)g_active, (long)g_dead, (unsigned)(wr - pub), (unsigned)(pub - rd),
+        R.sleeping ? "asleep waiting for commands" : "awake");
+    Log("!!!     [GxRT] frames produced %u, consumed %u; drains %lu, %lu of them abandoned after %lu ms; "
+        "ring-full waits %lu, frame-limit waits %lu",
+        (unsigned)R.framesProduced, (unsigned)R.framesConsumed, g_drains, g_drainGaveUp,
+        (unsigned long)kDrainGiveUpMs, g_waitsRingFull, g_throttleWaits);
+}
+
 namespace {
 // sub_4DD400 is `sub_7658A0("gxRestart", 1)` and nothing else: the console
 // dispatcher with the restart command, which is what typing it runs. It takes no

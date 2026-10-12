@@ -33,6 +33,15 @@ bool IsThunk(const void* fn);
 // that belongs to the main thread's frame.
 bool OnRenderThread();
 
+// The render thread's id, or 0 when none was started. For the freeze watchdog,
+// which samples it when the main thread stalls inside the D3D runtime.
+unsigned long RenderThreadId();
+
+// Logs the ring and frame counters in the form a freeze report wants them:
+// whether the render thread is mid-command or idle, and how far behind it is.
+// Safe from any thread; the reads are unlocked and may be one step stale.
+void LogStallState();
+
 // Main thread, from the pump. The render thread is normally only reachable
 // through a device the client creates through our hook, and this module loads
 // after the client made its first one. Once the client has settled this asks it

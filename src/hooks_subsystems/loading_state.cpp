@@ -46,6 +46,7 @@ static constexpr uintptr_t kClientWrite = 0x00454910;
 void* g_origSignalEvent = nullptr;
 
 static volatile LONG g_isLoading = 0;
+static volatile LONG g_lastWorldEntryTick = 0;   // GetTickCount() at the last world entry; 0 = none yet
 
 namespace {
 
@@ -325,6 +326,11 @@ void ApplyEventKind(EventKind kind) {
                 CrashDumper::Trace("LOADING end (PLAYER_ENTERING_WORLD)");
                 Log("[LoadingState] Loading screen finished (PLAYER_ENTERING_WORLD)");
             }
+            {
+                DWORD entryTick = GetTickCount();
+                if (entryTick == 0) entryTick = 1;      // 0 means "no entry yet"
+                InterlockedExchange(&g_lastWorldEntryTick, (LONG)entryTick);
+            }
             LoadTimerEnd();
             LuaGCGovernor::g_isLoading = false;
             ReleaseLoadingArena();
@@ -575,6 +581,10 @@ void Shutdown() {
 
 bool IsLoading() {
     return g_isLoading != 0;
+}
+
+unsigned long LastWorldEntryTick() {
+    return (unsigned long)g_lastWorldEntryTick;
 }
 
 bool IsInstalled() {

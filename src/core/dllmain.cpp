@@ -218,6 +218,7 @@ bool           g_wowOptSystemHooksClientOnly = true;
 // Forward-declared here because the watchdog (below) is defined before
 // lua_optimize.h is included; definitions match that header.
 namespace LuaOpt { bool IsLoadingMode(); bool IsReloading(); bool IsSwapping(); DWORD GetLastSwapTick(); bool IsInitialized(); }
+namespace LoadingState { unsigned long LastWorldEntryTick(); }
 
 // A target we declined because its first byte was a jump - somebody had already
 // detoured it. Reported once per address and then counted, because a client that
@@ -467,7 +468,8 @@ static void FreezeDumpOtherThreads(DWORD mainTid) {
             if (eip) {
                 char where[128];
                 FreezeClassifyAddr(eip, where);
-                Log("!!!     TID=%-6lu %s", te.th32ThreadID, where);
+                Log("!!!     TID=%-6lu %s%s", te.th32ThreadID, where,
+                    te.th32ThreadID == GxRT::RenderThreadId() ? "  (GxRT render thread)" : "");
                 reported++;
             }
         } while (Thread32Next(snap, &te));
@@ -503,8 +505,13 @@ static void FreezeDumpOtherThreads(DWORD mainTid) {
 // So the thread's own CPU time across the window decides, and the address count
 // only describes the spread. Neither needs a debugger, which is what makes it
 // useful to hand to someone who cannot get symbols for the client.
-static void SampleFrozenThread(DWORD mainTid) {
+// `label` is the heading of a thread other than the main one, which keeps its
+// lines apart from the main thread's in the same report.
+static void SampleFrozenThread(DWORD mainTid, const char* label = nullptr) {
     if (mainTid == 0) return;
+    char who[48];
+    if (label) _snprintf(who, sizeof(who) - 1, "[%s] ", label); else who[0] = 0;
+    who[sizeof(who) - 1] = 0;
     HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
                           THREAD_QUERY_LIMITED_INFORMATION, FALSE, mainTid);
     if (!h) return;
@@ -552,16 +559,16 @@ static void SampleFrozenThread(DWORD mainTid) {
 
     if (haveCpu && wallMs > 0.0) {
         const double pct = 100.0 * cpuMs / wallMs;
-        Log("!!! %d samples over %.0f ms landed on %d distinct addresses, and the "
+        Log("!!! %s%d samples over %.0f ms landed on %d distinct addresses, and the "
             "thread used %.0f ms of CPU in that time (%.0f%% of one core). %s",
-            got, wallMs, uniqN, cpuMs, pct,
+            who, got, wallMs, uniqN, cpuMs, pct,
             pct < 10.0  ? "It is waiting, not running: the addresses below are where it waits."
           : pct >= 50.0 ? "It is running: the addresses below are the loop."
                         : "It is partly running, so the addresses below mix a loop and a wait.");
     } else {
-        Log("!!! %d samples landed on %d distinct addresses. The thread's CPU time "
+        Log("!!! %s%d samples landed on %d distinct addresses. The thread's CPU time "
             "could not be read, so this does not say whether it was waiting or "
-            "running.", got, uniqN);
+            "running.", who, got, uniqN);
     }
 
     // Top five, largest first.
@@ -577,7 +584,10 @@ static void SampleFrozenThread(DWORD mainTid) {
     }
 }
 
-static void CaptureFreezeLocation(DWORD mainTid) {
+// `label` names a thread other than the main one (the GxRT render thread). It
+// changes the heading and skips the two things that belong to the main thread's
+// stall alone: the verdict entry and the flight recorder mark.
+static void CaptureFreezeLocation(DWORD mainTid, const char* label = nullptr) {
     if (mainTid == 0) return;
     HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION,
                           FALSE, mainTid);
@@ -621,14 +631,16 @@ static void CaptureFreezeLocation(DWORD mainTid) {
     if (eip) {
         char buf[MAX_PATH + 32];
         FreezeClassifyAddr(eip, buf);
-        Log("!!!   STUCK AT: EIP=%s", buf);
-        // The one line a freeze report is read for. Deduplicated by text, so a
-        // stall that recurs at the same address becomes one counted entry.
-        Verdict::Add(Verdict::Bad, "main thread was stuck at %s", buf);
-        // Read from the watchdog thread while the main thread is stuck, which is
-        // the one moment nothing is writing the ring - and the one moment the
-        // player could not press the key even if they wanted to.
-        FlightRecorder::Mark("the main thread stopped responding");
+        Log("!!!   %s: EIP=%s", label ? label : "STUCK AT", buf);
+        if (!label) {
+            // The one line a freeze report is read for. Deduplicated by text, so a
+            // stall that recurs at the same address becomes one counted entry.
+            Verdict::Add(Verdict::Bad, "main thread was stuck at %s", buf);
+            // Read from the watchdog thread while the main thread is stuck, which is
+            // the one moment nothing is writing the ring - and the one moment the
+            // player could not press the key even if they wanted to.
+            FlightRecorder::Mark("the main thread stopped responding");
+        }
         int shown = 0, rejected = 0;
         for (int i = 0; i < rawCount && shown < 6; i++) {
             uintptr_t v = rawStack[i];
@@ -653,6 +665,36 @@ static void CaptureFreezeLocation(DWORD mainTid) {
     }
 }
 
+// The GxRT render thread, when one was started. A main thread spinning inside
+// d3d9.dll on the device lock is waiting for whoever holds that lock, and with
+// the device's calls queued to the render thread the holder is usually that
+// thread. The watchdog used to sample the main thread only, so a stall inside
+// the runtime named the waiter and said nothing about the holder.
+//
+// Two things are printed. The ring's own state says whether the render thread
+// is mid-command (consumed behind published) or idle with nothing to do. The
+// thread's EIP, caller words and CPU time say whether it is waiting inside a
+// runtime call or running.
+static void CaptureRenderThread() {
+    const DWORD tid = (DWORD)GxRT::RenderThreadId();
+    if (tid == 0) return;
+    Log("!!!   GxRT render thread, TID=%lu:", (unsigned long)tid);
+    GxRT::LogStallState();
+    CaptureFreezeLocation(tid, "render thread at");
+    SampleFrozenThread(tid, "render thread");
+}
+
+// What `expected` rested on, so the line that calls a stall legitimate says
+// which condition made it so. A report that only says "loading/transition" cannot
+// be checked against the log around it.
+static const char* FreezeExpectedReason(bool graceLive) {
+    if (LuaOpt::IsLoadingMode()) return "loading mode";
+    if (LuaOpt::IsReloading())   return "reload in progress";
+    if (LuaOpt::IsSwapping())    return "Lua state swap in progress";
+    if (graceLive)               return "within 30 s of a Lua state swap, no world entry since";
+    return "none";
+}
+
 // perf_diagnostics.h is included further down this file; declare what the
 // watchdog needs here so the escalation path can dump the memory snapshot.
 namespace PerfDiagnostics { void LogPerformanceSnapshot(double elapsedMs); }
@@ -675,8 +717,20 @@ static DWORD WINAPI FreezeWatchdogProc(LPVOID) {
             // full freeze report. The grace period runs 30s past a swap: the
             // client's addon loader runs synchronously after it, by which point
             // IsReloading and IsSwapping have already cleared.
+            //
+            // The grace stops at the world entry that follows the swap. The
+            // addon loader runs before PLAYER_ENTERING_WORLD, so a stall after
+            // that event is not the loader. A tester's stall inside the D3D
+            // runtime began nine seconds after "Initial world entry finished" and
+            // was filed as expected; this grace was the only flag its log shows
+            // still standing, and it kept the freeze report, the thread dump and
+            // the render thread capture from running.
             DWORD swapTick = LuaOpt::GetLastSwapTick();
-            bool inPostSwapGrace = (swapTick != 0 && (GetTickCount() - swapTick) < 30000);
+            const DWORD entryTick = (DWORD)LoadingState::LastWorldEntryTick();
+            const bool entryFollowedSwap =
+                swapTick != 0 && entryTick != 0 && (LONG)(entryTick - swapTick) >= 0;
+            bool inPostSwapGrace = (swapTick != 0 && !entryFollowedSwap &&
+                                    (GetTickCount() - swapTick) < 30000);
             bool expected = LuaOpt::IsLoadingMode() || LuaOpt::IsReloading() || LuaOpt::IsSwapping() || inPostSwapGrace;
 
             // A loading screen that never ends looks exactly like "expected"
@@ -690,6 +744,7 @@ static DWORD WINAPI FreezeWatchdogProc(LPVOID) {
                     "loading/transition -- this is no longer a normal load", elapsed);
                 CaptureFreezeLocation(g_mainThreadId);
                 SampleFrozenThread(g_mainThreadId);
+                CaptureRenderThread();
                 PerfDiagnostics::LogPerformanceSnapshot((double)elapsed);
             }
 
@@ -711,14 +766,17 @@ static DWORD WINAPI FreezeWatchdogProc(LPVOID) {
             // the location.
             if (expected && elapsed > 8000 && !locatedThisStall) {
                 locatedThisStall = true;
-                Log("[FreezeWatchdog] blocked %u ms and flagged as loading/transition. "
+                Log("[FreezeWatchdog] blocked %u ms and flagged as loading/transition (%s). "
                     "That is long enough to be worth a location even though it may "
-                    "be a legitimate load:", elapsed);
+                    "be a legitimate load:", elapsed,
+                    FreezeExpectedReason(inPostSwapGrace));
                 CaptureFreezeLocation(g_mainThreadId);
+                CaptureRenderThread();
             }
 
             if (expected) {
-                Log("[FreezeWatchdog] main thread blocked %u ms during loading/transition (expected, not a hang)", elapsed);
+                Log("[FreezeWatchdog] main thread blocked %u ms during loading/transition (%s; expected, not a hang)",
+                    elapsed, FreezeExpectedReason(inPostSwapGrace));
                 // Rounded to seconds so a run of stalls of similar length becomes
                 // one counted line rather than forty near-identical ones.
                 Verdict::Add(elapsed > 20000 ? Verdict::Bad : Verdict::Warn,
@@ -735,6 +793,7 @@ static DWORD WINAPI FreezeWatchdogProc(LPVOID) {
                 // and the difference decides whether a debugger or a profiler is
                 // the right tool next.
                 SampleFrozenThread(g_mainThreadId);
+                CaptureRenderThread();
 
                 // Concise suspect list only: features that logged an error or were
                 // active right up to the stall. The old full dump printed 100+

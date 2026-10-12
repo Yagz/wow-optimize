@@ -28,6 +28,13 @@ ClientWriteBatch::WriteFn GetClientWriter();
     // True between PLAYER_LEAVING_WORLD and PLAYER_ENTERING_WORLD.
     bool IsLoading();
 
+    // GetTickCount() when the client last reported the world entered, whether
+    // or not a PLAYER_LEAVING_WORLD preceded it (the first entry of a session
+    // has none). 0 until it has happened. The freeze watchdog ends its
+    // post-swap grace on this: the addon loader runs before the entry event, so
+    // a stall after it is not the loader.
+    unsigned long LastWorldEntryTick();
+
     // Accounting for where a loading screen's time goes.
     //
     // The project has spent years adding prefetch, memory-mapped archives and
