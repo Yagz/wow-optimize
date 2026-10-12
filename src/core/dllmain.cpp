@@ -49,6 +49,7 @@
 #include "x87_precision_check.h"
 #include "self_bench.h"
 #include "freeze_catcher.h"
+#include "client_idle.h"
 #include "ray_triangle_sse2.h"
 #include "occluder_sphere_sse2.h"
 #include "m2_anim_find_key_fast.h"
@@ -2512,7 +2513,13 @@ static void WINAPI hooked_Sleep(DWORD ms) {
         // nothing about who called it: its caller's return address sits three words above the
         // hook's own (return into the wrapper, the argument, the wrapper's saved EBP, then it).
         uintptr_t asker = (uintptr_t)_ReturnAddress();
-        if (asker == 0x0086B28D) asker = ((const uintptr_t*)_AddressOfReturnAddress())[3];
+        if (asker == 0x0086B28D) {
+            // AsyncPollSpin detours the wrapper; through it the word above is a return
+            // into this DLL, and the detour keeps the client's own caller instead.
+            const uintptr_t viaDetour = AsyncPollSpin::MainThreadWrapperCaller();
+            asker = viaDetour ? viaDetour : ((const uintptr_t*)_AddressOfReturnAddress())[3];
+        }
+        if (ClientIdle::IsIdleSleepCaller(asker)) ++ClientIdle::g_sleeps;
         SleepTimer sleepTimer(asker, ms);
 
         if (asker == 0x0087DF79 && FastExit::SoundStopSleep(ms)) return;

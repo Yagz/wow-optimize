@@ -70,6 +70,7 @@
 #include "ab_test.h"
 #include "flight_recorder.h"
 #include "frame_bench.h"
+#include "client_idle.h"
 #include "config.h"
 #include "session_verdict.h"
 #include "sampling_profiler.h"
@@ -593,6 +594,8 @@ static void SweepFrame() {
 
 void OnFrame() {
     if (!g_active) return;
+    static LONG s_idleSeen = 0;
+    const bool idle = ClientIdle::SinceLast(s_idleSeen);
     if (g_sweep) { SweepFrame(); return; }
 
     LARGE_INTEGER qnow;
@@ -666,6 +669,10 @@ void OnFrame() {
     // The client locks itself to 30 frames a second without focus. Those frames land
     // in whichever half the stint was in and say nothing about either.
     if (!FrameBench::GameInFocus()) { ++g_dropped; return; }
+    // The client's nothing-to-draw sleep (client_idle.h): about 250 ms of idling that
+    // lands in whichever half the stint was in. A run of them was once read as one
+    // half's long frames.
+    if (idle) { ++g_dropped; return; }
 
     Add(g_onNow ? g_on[g_statIndex] : g_off[g_statIndex], frameMs);
     {

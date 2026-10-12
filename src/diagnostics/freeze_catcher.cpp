@@ -62,6 +62,7 @@
 #include "config.h"
 #include "loading_state.h"
 #include "lua_optimize.h"
+#include "client_idle.h"
 
 extern "C" void Log(const char* fmt, ...);
 
@@ -115,6 +116,7 @@ volatile LONG g_count = 0;       // samples in the current armed window
 // Totals for the report.
 unsigned long g_frames   = 0;
 unsigned long g_caught   = 0;    // frames that armed it
+unsigned long g_idleFrames = 0;  // armed, but the client was in its nothing-to-draw sleep
 unsigned long g_samples  = 0;
 unsigned long g_worstMs  = 0;
 unsigned long g_wakes    = 0;
@@ -613,9 +615,15 @@ void OnFrame() {
     // only place in this module where two threads touch the same memory.
     g_frameStartMs = now;
 
-    // The frame that just ended. If the watchdog armed on it, say what it saw.
+    // The frame that just ended. If the watchdog armed on it, say what it saw -
+    // unless the client spent it in its own "nothing to draw" sleep, which is an
+    // idle window and not a stall (client_idle.h). Those are counted, not written up.
+    static LONG s_idleSeen = 0;
+    const bool idle = ClientIdle::SinceLast(s_idleSeen);
     const LONG n = InterlockedExchange(&g_count, 0);
-    if (n > 0 && len >= kArmMs) {
+    if (n > 0 && len >= kArmMs && idle) {
+        ++g_idleFrames;
+    } else if (n > 0 && len >= kArmMs) {
         ++g_caught;
         g_samples += (unsigned long)(n < kRing ? n : kRing);
         if ((unsigned long)len > g_worstMs) g_worstMs = (unsigned long)len;
@@ -686,6 +694,9 @@ void LogStats() {
             "measured.");
         return;
     }
+    Log("[FreezeCatcher] %lu frame(s) over %ld ms were the client sleeping because it had nothing "
+        "to draw (minimised window or device not ready) and are not written up below.",
+        g_idleFrames, kArmMs);
     if (g_caught == 0) {
         Log("[FreezeCatcher] %lu frames watched over %lu wake-ups and none of "
             "them ran past %ld ms. Measured and zero: there was nothing to "

@@ -307,7 +307,23 @@ void UpdateMode() {
     g_mode = next;
 }
 
+// The Sleep hook under this detour finds the wrapper's caller three words above
+// its own return address. With this detour in the way that word is a return into
+// this DLL, so the sleep census filed the client's 25 ms idle sleeps under
+// wow_optimize.dll and the idle count could not see them. The client's caller is
+// kept here for the main thread while the wrapper runs.
+volatile uintptr_t g_mainWrapperCaller = 0;
+
+struct WrapperCallerScope {
+    bool set;
+    explicit WrapperCallerScope(uintptr_t ret) : set(GetCurrentThreadId() == g_mainThreadId) {
+        if (set) g_mainWrapperCaller = ret;
+    }
+    ~WrapperCallerScope() { if (set) g_mainWrapperCaller = 0; }
+};
+
 void __cdecl Hooked_OsSleep(DWORD ms) {
+    WrapperCallerScope callerScope((uintptr_t)_ReturnAddress());
     if (ms != 1) { g_orig(ms); return; }
     const uintptr_t ret = (uintptr_t)_ReturnAddress();
     int site;
@@ -369,6 +385,10 @@ void __cdecl Hooked_OsSleep(DWORD ms) {
 }
 
 } // namespace
+
+uintptr_t MainThreadWrapperCaller() {
+    return g_mainWrapperCaller;
+}
 
 void Init() {
     if (!Config::g_settings.OptAsyncPollSpin) return;

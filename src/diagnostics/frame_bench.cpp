@@ -16,6 +16,7 @@
 #include "core/config.h"
 #include "crash_dumper.h"
 #include "version.h"
+#include "client_idle.h"
 
 extern "C" void Log(const char* fmt, ...);
 
@@ -39,6 +40,7 @@ static double    g_longestGapMs = 0.0;
 
 static uint32_t  g_buckets[BUCKET_COUNT];
 static uint64_t  g_background  = 0;     // frames left out because the window was not in focus
+static uint64_t  g_clientIdle  = 0;     // frames left out because the client slept with nothing to draw
 static uint32_t  g_overflow    = 0;
 static uint64_t  g_frames      = 0;
 static double    g_sumMs       = 0.0;
@@ -380,6 +382,10 @@ void OnPresent(Source src) {
     LONGLONG prev = g_last.QuadPart;
     g_last = now;
     g_source = src;
+    // Read on every frame, before any early return, so an idle sleep is charged to
+    // the frame it happened in and not carried into a later one.
+    static LONG s_idleSeen = 0;
+    const bool idle = ClientIdle::SinceLast(s_idleSeen);
 
     // First frame after start has no meaningful predecessor. A frame that spans a
     // loading screen is discarded for the same reason: the gap is load time, not
@@ -387,6 +393,9 @@ void OnPresent(Source src) {
     if (prev == 0 || LuaOpt::IsLoadingMode()) return;
 
     if (!GameInFocus()) { ++g_background; return; }
+    // The client drew nothing and slept about a quarter of a second (client_idle.h).
+    // That is not a frame time, and it used to arrive here as a slow frame.
+    if (idle) { ++g_clientIdle; return; }
 
     double ms = (double)(now.QuadPart - prev) * 1000.0 / (double)g_freq.QuadPart;
 
@@ -465,6 +474,10 @@ void Report(const char* reason) {
         Log("[FrameBench]   %llu frame(s) were left out because the game window was not in "
             "focus, where the client locks itself to 30 frames a second. They are not in any "
             "figure here.", (unsigned long long)g_background);
+    if (g_clientIdle)
+        Log("[FrameBench]   %llu frame(s) were left out because the client had nothing to draw "
+            "(minimised window or device not ready) and slept instead. They are not in any figure "
+            "here.", (unsigned long long)g_clientIdle);
     Log("[FrameBench]   janky frames: >33ms %.0f (%.2f%%)  >50ms %.0f (%.2f%%)  >100ms %.0f (%.2f%%)",
         g_over33,  100.0 * g_over33  / (double)g_frames,
         g_over50,  100.0 * g_over50  / (double)g_frames,
