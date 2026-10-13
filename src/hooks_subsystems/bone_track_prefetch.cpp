@@ -19,26 +19,31 @@
 // chain. Every first touch is a miss that nothing overlaps.
 //
 // What was measured, at the login screen of the rig with one model and the
-// A/B harness off, 15000 evaluations a run, three runs each way:
+// A/B harness off, 15000 evaluations a run, three runs each way (temporary
+// timers, not in the tree):
 //
-//     quaternion evaluation, first touch    off 452 400 398 cycles   on 315 395 292
-//     the same evaluation run again         off 209 239 190          on 182 193 178
-//     the pass itself                       115.6 cycles a bone
+//     quaternion evaluation, first touch    off 370 526 512 cycles   on 291 350 347
+//     the same evaluation run again         off 187 198 198          on 188 168 165
+//     the pass itself                       79 to 86 cycles a bone
 //
 // So the first touch is about twice the repeat, which is waiting for memory, and
-// the pass takes about a fifth of that off the quaternion track. The pass is not
-// free: at 115 cycles a bone it has to win back more than that across a bone's
-// three tracks, and at the login screen it does by a margin that is small and
-// has not been measured as a frame time. A world has more models and a larger
-// working set, which moves the misses and not the pass, so this is expected to
-// be the lower end; that is an expectation, not a measurement.
+// the pass takes about a third of it off the quaternion track. The pass is not
+// free, and it has to win back more than its 80 cycles a bone across a bone's
+// three tracks. An earlier version made the same loads as the evaluators in
+// plain dependent order and cost 115 cycles a bone, because a load that misses
+// sits at the head of the reorder buffer and stalls everything behind it. This
+// one is a three-stage pipeline over the bones: each stage's loads are of lines
+// the stage before prefetched six bones earlier, so none of them waits.
 //
-// This runs once per model per pass, at the top of the bone loop, and does what
-// the loop will do a moment later for every bone, in a tight loop with no
-// arithmetic between the bones: it follows each track's chain with the same loads
-// the evaluator makes (the same animation index, the same hint) and prefetches
-// the key lines at the end. The bones are independent, so up to ten chains are in
-// flight at once instead of one.
+// Only the quaternion track was timed. The two vector tracks are assumed to
+// behave alike; no frame time has been measured either way. A world has more
+// models and a larger working set, which moves the misses and not the pass, so
+// this is expected to do better there. That is an expectation, not a measurement.
+//
+// This runs once per model per pass, at the top of the bone loop. For each
+// bone it prefetches the records, then the per-animation tables, then the
+// timestamp and key lines, using the same animation index and hint the
+// evaluators will use.
 //
 // Nothing here writes anything the client reads: it reads the bone records, the
 // instance records and the track tables, and its only side effect is the cache.
@@ -119,32 +124,53 @@ uintptr_t g_resume = kResume;
 // Plain counters; once per model per pass.
 unsigned long g_passes = 0, g_bones = 0, g_tracks = 0, g_skippedAb = 0;
 
-// Where the loads' results go, so the loop that makes them is not removed.
-volatile uint32_t g_sink = 0;
-
-// One track's chain, in the loads the evaluator makes. `rec` is the instance
-// record, `hintAt` the hint's offset in it, `stride` the key size in bytes.
-__forceinline uint32_t Touch(const uint8_t* track, const uint8_t* rec, unsigned hintAt,
-                             unsigned animOff, unsigned stride) {
-    uint32_t acc = 0;
-    const uint32_t nAnims = *(const uint32_t*)(track + kT_nAnims);
-    if (nAnims == 0) return 0;
-
+// The chain of one track in three stages, run for different bones at the same
+// time (see Pass). A stage's loads are of lines the stage before it prefetched
+// some bones earlier, so they are hits and nothing in the pass waits for memory:
+// a load that missed would sit at the head of the reorder buffer and stall
+// everything behind it, which is what a pass of plain dependent loads does.
+//
+//   stage 1  prefetch the bone record and the instance record
+//   stage 2  the track's table of key lists and its entry list: prefetch
+//            sub[anim] and entries[sel]
+//   stage 3  sub[anim] -> the timestamps, entries[sel] -> the keys: prefetch
+//            timestamps[hint] and keys[hint], both with the next one
+__forceinline unsigned AnimOf(const uint8_t* track, const uint8_t* rec, unsigned animOff,
+                              uint32_t nAnims) {
     uint32_t anim = *(const uint16_t*)(rec + animOff);
     if (*(const uint16_t*)(track + kT_globalSeq) != 0xFFFFu) anim = 0;
     else if (anim >= nAnims) anim = 0;
+    return anim;
+}
 
+__forceinline void Stage2(const uint8_t* track, const uint8_t* rec, unsigned animOff) {
+    const uint32_t nAnims = *(const uint32_t*)(track + kT_nAnims);
+    if (nAnims == 0) return;
+    const uint8_t* sub = *(const uint8_t* const*)(track + kT_subTracks);
+    if (sub) _mm_prefetch((const char*)(sub + 8u * AnimOf(track, rec, animOff, nAnims)), _MM_HINT_T0);
+    const uint32_t count = *(const uint32_t*)(track + kT_count);
+    const uint8_t* entries = *(const uint8_t* const*)(track + kT_entries);
+    if (entries && count) {
+        const uint32_t want = *(const uint16_t*)(rec + kR_animId);
+        _mm_prefetch((const char*)(entries + 8u * ((want < count) ? want : 0u)), _MM_HINT_T0);
+    }
+}
+
+__forceinline void Stage3(const uint8_t* track, const uint8_t* rec, unsigned hintAt,
+                          unsigned animOff, unsigned stride) {
+    const uint32_t nAnims = *(const uint32_t*)(track + kT_nAnims);
+    if (nAnims == 0) return;
     uint32_t hint = *(const uint32_t*)(rec + hintAt);
 
     const SubTrack* sub = *(const SubTrack* const*)(track + kT_subTracks);
-    uint32_t nKeys = 0;
     if (sub) {
-        nKeys = sub[anim].nKeys;
-        const uint32_t* ts = sub[anim].timestamps;
-        if (nKeys > 1 && ts) {
-            if (hint >= nKeys) hint = 0;
-            acc += ts[hint];
-            if (hint + 1 < nKeys) acc += ts[hint + 1];
+        const SubTrack& st = sub[AnimOf(track, rec, animOff, nAnims)];
+        if (st.nKeys > 1 && st.timestamps) {
+            if (hint >= st.nKeys) hint = 0;
+            _mm_prefetch((const char*)(st.timestamps + hint), _MM_HINT_T0);
+            _mm_prefetch((const char*)(st.timestamps + hint + 1), _MM_HINT_T0);
+        } else {
+            hint = 0;
         }
     }
 
@@ -152,8 +178,7 @@ __forceinline uint32_t Touch(const uint8_t* track, const uint8_t* rec, unsigned 
     const uint8_t* entries = *(const uint8_t* const*)(track + kT_entries);
     if (entries && count) {
         const uint32_t want = *(const uint16_t*)(rec + kR_animId);
-        const uint32_t sel = (want < count) ? want : 0u;
-        const uint32_t* entry = (const uint32_t*)(entries + 8u * sel);
+        const uint32_t* entry = (const uint32_t*)(entries + 8u * ((want < count) ? want : 0u));
         if (entry[0]) {
             const uint8_t* keys = (const uint8_t*)entry[1];
             if (keys) {
@@ -162,8 +187,9 @@ __forceinline uint32_t Touch(const uint8_t* track, const uint8_t* rec, unsigned 
             }
         }
     }
-    return acc;
 }
+
+constexpr uint32_t kDist = 6;   // bones between one stage and the next
 
 void Pass(const uint8_t* model, const uint8_t* inst) {
     ++g_passes;
@@ -173,37 +199,59 @@ void Pass(const uint8_t* model, const uint8_t* inst) {
     const uint32_t count = *(const uint32_t*)(model + kM_boneCount);
     if (count == 0 || count > kMaxBones) return;
 
-    uint32_t acc = 0;
     __try {
         const uint8_t* bones = *(const uint8_t* const*)(model + kM_bones);
         const uint8_t* recs  = *(const uint8_t* const*)(inst + kI_records);
         if (!bones || !recs) return;
 
-        for (uint32_t i = 0; i < count; ++i) {
-            const uint8_t* b = bones + (size_t)i * kB_size;
-            const uint8_t* r = recs + (size_t)i * kR_size;
-            if (*(const uint16_t*)(r + kR_alias) != 0xFFFFu) {
-                // A copy of another record's animation state: the client copies
-                // it across and evaluates nothing for this bone.
-                continue;
+        const uint32_t total = count + 2 * kDist;
+        for (uint32_t n = 0; n < total; ++n) {
+            if (n < count) {
+                const uint8_t* b = bones + (size_t)n * kB_size;
+                const uint8_t* r = recs + (size_t)n * kR_size;
+                _mm_prefetch((const char*)(b + kB_trans), _MM_HINT_T0);
+                _mm_prefetch((const char*)(b + kB_scale), _MM_HINT_T0);
+                _mm_prefetch((const char*)r, _MM_HINT_T0);
+                _mm_prefetch((const char*)(r + 0x40), _MM_HINT_T0);
+                _mm_prefetch((const char*)(r + 0x80), _MM_HINT_T0);
             }
-            acc += Touch(b + kB_trans, r, kR_hintTrans, kR_animId, 12);
-            acc += Touch(b + kB_rot,   r, kR_hintRot,   kR_animId, 8);
-            acc += Touch(b + kB_scale, r, kR_hintScale, kR_animId, 12);
-            // The blend animation's chain, only for a bone that is blending.
-            if (*(const float*)(r + kR_blend) != 0.0f) {
-                acc += Touch(b + kB_trans, r, kR_hintTrans + 4, kR_animId2, 12);
-                acc += Touch(b + kB_rot,   r, kR_hintRot + 4,   kR_animId2, 8);
-                acc += Touch(b + kB_scale, r, kR_hintScale + 4, kR_animId2, 12);
-                g_tracks += 3;
+            if (n >= kDist && n - kDist < count) {
+                const uint32_t i = n - kDist;
+                const uint8_t* b = bones + (size_t)i * kB_size;
+                const uint8_t* r = recs + (size_t)i * kR_size;
+                if (*(const uint16_t*)(r + kR_alias) == 0xFFFFu) {
+                    Stage2(b + kB_trans, r, kR_animId);
+                    Stage2(b + kB_rot,   r, kR_animId);
+                    Stage2(b + kB_scale, r, kR_animId);
+                    if (*(const float*)(r + kR_blend) != 0.0f) {
+                        Stage2(b + kB_trans, r, kR_animId2);
+                        Stage2(b + kB_rot,   r, kR_animId2);
+                        Stage2(b + kB_scale, r, kR_animId2);
+                    }
+                }
             }
-            g_tracks += 3;
+            if (n >= 2 * kDist && n - 2 * kDist < count) {
+                const uint32_t i = n - 2 * kDist;
+                const uint8_t* b = bones + (size_t)i * kB_size;
+                const uint8_t* r = recs + (size_t)i * kR_size;
+                if (*(const uint16_t*)(r + kR_alias) == 0xFFFFu) {
+                    Stage3(b + kB_trans, r, kR_hintTrans, kR_animId, 12);
+                    Stage3(b + kB_rot,   r, kR_hintRot,   kR_animId, 8);
+                    Stage3(b + kB_scale, r, kR_hintScale, kR_animId, 12);
+                    g_tracks += 3;
+                    if (*(const float*)(r + kR_blend) != 0.0f) {
+                        Stage3(b + kB_trans, r, kR_hintTrans + 4, kR_animId2, 12);
+                        Stage3(b + kB_rot,   r, kR_hintRot + 4,   kR_animId2, 8);
+                        Stage3(b + kB_scale, r, kR_hintScale + 4, kR_animId2, 12);
+                        g_tracks += 3;
+                    }
+                }
+            }
         }
         g_bones += count;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         InterlockedExchange(&g_faulted, 1);
     }
-    g_sink = acc;
 }
 
 void __cdecl PassFromThunk(const uint8_t* model, const uint8_t* inst) {
@@ -277,9 +325,9 @@ bool Init() {
         "bone's three track chains with the loads the evaluators will make and "
         "prefetches the key lines, so the misses of different bones overlap. "
         "At the login screen the first evaluation of a quaternion track costs about "
-        "420 cycles and 320 with this, and the pass costs 115 cycles a bone. Nothing "
-        "it reads is written, and a fault in it switches it off. Not measured in a "
-        "world.%s",
+        "470 cycles and 330 with this, and the pass costs 80 to 86 cycles a bone. "
+        "Nothing it reads is written, and a fault in it switches it off. Not "
+        "measured in a world.%s",
         (unsigned)kSite, g_abSubject ? " Under A/B test." : "");
     return true;
 }
