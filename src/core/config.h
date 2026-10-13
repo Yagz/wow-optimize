@@ -721,7 +721,7 @@ namespace Config {
         bool OptM2ParallelRoots = true;
         bool OptParticleFillFast = false;
         bool OptRibbonEdgeLoop = false;
-        bool OptBoneTrackPrefetch = false;
+        bool OptBoneTrackPrefetch = true;
         bool OptParticleLoopPrefetch = false;
         bool OptAddonMemoryWalk = false;
         bool OptHorizonTestAABB = true;
