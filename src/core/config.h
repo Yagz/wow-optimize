@@ -466,6 +466,10 @@ namespace Config {
         // instead of calling it "private". Hooks ntdll's NtAllocateVirtualMemory
         // and NtFreeVirtualMemory. Off by default and experimental.
         bool OptVaCensus = false;
+        // Pairs every live block the client allocates through its wrapper with the source file
+        // and line it passed, so the log names who holds the heap. Measurement only; costs a
+        // lock per recorded block and about 50 MB above 2GB. Off by default.
+        bool OptAllocTagCensus = false;
         // MEM_TOP_DOWN for large reservations, by class of caller. Modules is
         // everything that is neither wow.exe, this tool nor a system DLL: DXVK,
         // the GPU driver, other injected DLLs. Client is wow.exe itself, whose

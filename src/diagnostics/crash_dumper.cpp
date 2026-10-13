@@ -15,6 +15,7 @@
 #include "crash_dumper.h"
 #include "session_verdict.h"
 #include "config.h"
+#include "alloc_tag_census.h"
 #include <intrin.h>
 
 #include <dbghelp.h>
@@ -726,6 +727,7 @@ static BOOL WINAPI Hooked_TerminateProcess(HANDLE hProcess, UINT uExitCode) {
                     "handler, after its error dialog. The dialog said:", uExitCode);
                 LogClientFatalErrorText();
                 LogMemoryAtFatalError();
+                AllocTagCensus::LogAtTerminate();
             } else {
                 Log("!!! TERMINATE PROCESS (code=%u) - silent kill detected !!!", uExitCode);
             }

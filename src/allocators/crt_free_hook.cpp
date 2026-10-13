@@ -14,6 +14,7 @@
 #include "config.h"
 #include "crash_dumper.h"
 #include "sampling_profiler.h"
+#include "alloc_tag_census.h"
 
 extern "C" void Log(const char* fmt, ...);
 
@@ -134,7 +135,10 @@ static inline void NoteHit(LONG n) {
 int __stdcall Hooked_CrtFree(void* block, int a2, int a3, int a4) {
     LONG n = ++g_calls;
     NoteHit(n);
-    if (block) g_wow_free(block);
+    if (block) {
+        if (AllocTagCensus::g_on) AllocTagCensus::OnFree(block);
+        g_wow_free(block);
+    }
     return 1;
 }
 
@@ -163,7 +167,10 @@ void* __stdcall Hooked_WowAlloc(int size, int a2, DWORD exitCode, char flags) {
 
     unsigned rounded = ((unsigned)size + 7u) & 0xFFFFFFF8u;
     void* p = (flags & 8) ? g_crt_calloc(1, rounded) : g_crt_malloc(rounded);
-    if (p) return p;
+    if (p) {
+        if (AllocTagCensus::g_on) AllocTagCensus::OnAlloc(p, rounded, (const char*)(uintptr_t)a2, exitCode);
+        return p;
+    }
 
     // Out of memory: hand it back to the original, which reports it properly.
     return g_origAlloc(size, a2, exitCode, flags);

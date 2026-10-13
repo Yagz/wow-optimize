@@ -163,6 +163,7 @@ static const BoolSetting kBoolSettings[] = {
     { "Graphics_Sound", "ParticleFill", &Settings::OptParticleFill },
     { "General", "MimallocHighArena", &Settings::OptMimallocHighArena },
     { "General", "VaCensus", &Settings::OptVaCensus },
+    { "General", "AllocTagCensus", &Settings::OptAllocTagCensus },
     { "General", "HighPlacementModules", &Settings::OptHighPlacementModules },
     { "General", "HighPlacementClient", &Settings::OptHighPlacementClient },
     { "General", "HighPlacementHeapGrowth", &Settings::OptHighPlacementHeapGrowth },
@@ -809,6 +810,7 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
             g_settings.MimallocHighArenaMaxMB = g_settings.MimallocHighArenaMB;
         if (g_settings.MimallocHighArenaMaxMB > 2048) g_settings.MimallocHighArenaMaxMB = 2048;
         g_settings.OptVaCensus             = GetPrivateProfileIntA("General", "VaCensus", 0, iniPath.c_str()) != 0;
+        g_settings.OptAllocTagCensus       = GetPrivateProfileIntA("General", "AllocTagCensus", 0, iniPath.c_str()) != 0;
         g_settings.OptHighPlacementModules = GetPrivateProfileIntA("General", "HighPlacementModules", 0, iniPath.c_str()) != 0;
         g_settings.OptHighPlacementClient  = GetPrivateProfileIntA("General", "HighPlacementClient", 0, iniPath.c_str()) != 0;
         g_settings.OptHighPlacementHeapGrowth = GetPrivateProfileIntA("General", "HighPlacementHeapGrowth", 1, iniPath.c_str()) != 0;

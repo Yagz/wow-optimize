@@ -69,6 +69,7 @@
 #include "camera_replay.h"
 #include "camera_watch.h"
 #include "client_write_batch.h"
+#include "alloc_tag_census.h"
 #include "aabb_overlap_sse2.h"
 #include "anim_quat_unpack_sse2.h"
 #include "anim_vec3_track_sse2.h"
@@ -6125,6 +6126,7 @@ static void DumpPeriodicStats(const char* why, bool atProcessExit) {
     STAT_TIME("RegexCache_LogStats", RegexCache_LogStats());
     STAT_TIME("MatrixCopySSE2_LogStats", MatrixCopySSE2_LogStats());
     STAT_TIME("ReportCrtFreeStats", ReportCrtFreeStats());
+    STAT_TIME("AllocTagCensus::LogStats", AllocTagCensus::LogStats());
     if (g_spinTaken > 0 || g_spinSkipped > 0) {
         Log("[SleepPrecision] busy-wait taken %ld, handed back %ld (frames over "
             "%.0f ms give the time to the scheduler instead)",
@@ -8669,6 +8671,7 @@ static DWORD WINAPI MainThread(LPVOID param) {
     // CRT Free Hook - 2901 callers (#2 most called)
     bool crtFreeOk = InstallCrtFreeHook();
     InstallCrtAllocHook();
+    AllocTagCensus::Init();
 
     // Aligned Allocator Cache - 1764 callers (thread-local pool for small allocations)
     bool alignedAllocOk = InstallAlignedAllocCache();

@@ -281,6 +281,8 @@ add_library(wow_optimize SHARED
     src/runtime_vm/lua_fastpath.h
     src/runtime_vm/lua_internals.cpp
     src/runtime_vm/lua_internals.h
+    src/diagnostics/alloc_tag_census.cpp
+    src/diagnostics/alloc_tag_census.h
     src/diagnostics/net_diag.cpp
     src/diagnostics/net_diag.h
     src/diagnostics/thread_cpu.cpp
