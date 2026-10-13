@@ -370,9 +370,17 @@ extern "C" void HeapCompactor_RunPendingWork() {
         // genuinely full rather than merely fragmented there is nothing to
         // recover, and grinding every heap in the process to find that out again
         // costs a frame each time.
+        //
+        // A session that has not got 256 KB back in total from six passes - three
+        // at the base interval and three at twice it - is not going to. A field
+        // session of 2026-10-13 ran fifteen passes at 60 s doubling to 960 s,
+        // every one "0KB recovered", and the main thread paid 10 to 35 ms for
+        // each; the maintenance stall report totals 557 ms for the session.
         if (gainedKb < 256) {
             if (++g_uselessInARow >= 3) {
-                if (g_compactIntervalMs < 600000) {
+                const bool neverPaid = g_reclaimedTotalKb < 256;
+                if (g_compactIntervalMs < 600000 &&
+                    !(neverPaid && g_compactIntervalMs >= 120000)) {
                     g_compactIntervalMs *= 2;
                     Log("[HeapCompactor] Three passes in a row recovered almost "
                         "nothing; backing off to one attempt per %u seconds.",
