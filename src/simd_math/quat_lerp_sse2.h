@@ -11,6 +11,12 @@ namespace QuatLerpSse2 {
 bool Init();
 void LogStats();
 
+// True once the vector path has been bit-identical to the client's for its
+// whole learning phase and has not differed since (and the module is not an
+// A/B subject). The quaternion track calls quat_lerp_core.h directly while
+// it is.
+extern bool g_usable;
+
 } // namespace QuatLerpSse2
 
 #endif

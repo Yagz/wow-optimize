@@ -90,6 +90,8 @@
 #include <cstring>
 
 #include "anim_vec3_track_sse2.h"
+#include "m2_anim_find_key_fast.h"
+#include "anim_find_key_core.h"
 #include "MinHook.h"
 #include "version.h"
 #include "config.h"
@@ -133,6 +135,18 @@ typedef void (__cdecl* vecTrack_fn)(void* obj, void* state, void* track,
                                     uint32_t* out, const float* defVec);
 
 vecTrack_fn orig_VecTrack = nullptr;
+
+// The key search, called directly once the hook on sub_8284D0 has proved the same
+// code against the client for its whole learning phase (M2AnimFindKey::g_usable),
+// and through the client's routine until then or after it retires. The direct
+// call drops the trampoline, the detour's prologue and its counters.
+__forceinline void FindKey(void* obj, void* timing, void* track,
+                           uint32_t* hint, uint32_t* second, float* frac) {
+    if (M2AnimFindKey::g_usable)
+        M2AnimFindKeyCore::Run(obj, timing, track, hint, second, frac);
+    else
+        ((findKey_fn)kFindKey)(obj, nullptr, timing, track, hint, second, frac);
+}
 
 bool g_installed = false;
 bool g_armed     = false;
@@ -205,8 +219,7 @@ void Evaluate(void* obj, uint8_t* state, uint8_t* track,
     if (entry[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing1, track,
-                               out, &second, &frac);
+        FindKey(obj, state + kS_timing1, track, out, &second, &frac);
         const float* keys = (const float*)entry[1];
         if (interp == 0) {
             const float* k = keys + kKeyStride * out[0];
@@ -235,8 +248,7 @@ void Evaluate(void* obj, uint8_t* state, uint8_t* track,
     if (entryB[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing2, track,
-                               out + 1, &second, &frac);
+        FindKey(obj, state + kS_timing2, track, out + 1, &second, &frac);
         const float* keys = (const float*)entryB[1];
         Vec3d a = LoadVec3(keys + kKeyStride * out[1]);
         Vec3d b = LoadVec3(keys + kKeyStride * second);

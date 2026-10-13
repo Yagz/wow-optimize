@@ -136,6 +136,10 @@
 #include <cstring>
 
 #include "anim_quat_unpack_sse2.h"
+#include "m2_anim_find_key_fast.h"
+#include "anim_find_key_core.h"
+#include "quat_lerp_sse2.h"
+#include "quat_lerp_core.h"
 #include "MinHook.h"
 #include "version.h"
 #include "config.h"
@@ -185,6 +189,18 @@ typedef void (__cdecl* trackQuat_fn)(void* obj, void* state, void* track,
 
 trackQuat_fn orig_TrackQuat = nullptr;
 
+// The key search, called directly once the hook on sub_8284D0 has proved the same
+// code against the client for its whole learning phase (M2AnimFindKey::g_usable),
+// and through the client's routine until then or after it retires. The direct
+// call drops the trampoline, the detour's prologue and its counters.
+__forceinline void FindKey(void* obj, void* timing, void* track,
+                           uint32_t* hint, uint32_t* second, float* frac) {
+    if (M2AnimFindKey::g_usable)
+        M2AnimFindKeyCore::Run(obj, timing, track, hint, second, frac);
+    else
+        ((findKey_fn)kFindKey)(obj, nullptr, timing, track, hint, second, frac);
+}
+
 bool g_installed = false;
 bool g_armed     = false;
 // Set at init when the A/B harness names this module, so the hot path
@@ -221,6 +237,16 @@ inline void UnpackQuat(const uint16_t* src, float* dst) {
     d23 = _mm_sub_pd(_mm_mul_pd(d23, g_scale), g_one);
     _mm_storeu_ps(dst, _mm_movelh_ps(_mm_cvtpd_ps(d01), _mm_cvtpd_ps(d23)));
     g_unpacked++;
+}
+
+// The lerp and renormalise, directly once the hook on sub_982630 has been
+// bit-identical to the client's for its whole learning phase.
+__forceinline const float* Lerp(float* r, float t, const float* a, const float* b) {
+    if (QuatLerpSse2::g_usable) {
+        QuatLerpCore::LerpNormalise(r, t, a, b);
+        return r;
+    }
+    return ((quatBlend_fn)kQuatLerp)(r, t, a, b);
 }
 
 inline void Copy4(float* dst, const float* src) {
@@ -285,8 +311,7 @@ void Evaluate(void* obj, uint8_t* state, uint8_t* track,
     if (entry[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing1, track,
-                               out, &second, &frac);
+        FindKey(obj, state + kS_timing1, track, out, &second, &frac);
         const uint16_t* keys = (const uint16_t*)entry[1];
         if (interp == 0) {
             UnpackQuat(keys + 4u * out[0], q);
@@ -295,7 +320,7 @@ void Evaluate(void* obj, uint8_t* state, uint8_t* track,
         float a[4], b[4], r[4];
         UnpackQuat(keys + 4u * out[0], a);
         UnpackQuat(keys + 4u * second, b);
-        Copy4(q, ((quatBlend_fn)kQuatLerp)(r, frac, a, b));
+        Copy4(q, Lerp(r, frac, a, b));
     } else {
         Copy4(q, defQuat);
         if (interp == 0) return;
@@ -314,13 +339,12 @@ void Evaluate(void* obj, uint8_t* state, uint8_t* track,
     } else {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing2, track,
-                               out + 1, &second, &frac);
+        FindKey(obj, state + kS_timing2, track, out + 1, &second, &frac);
         const uint16_t* keys = (const uint16_t*)entryB[1];
         float a[4], b[4], r[4];
         UnpackQuat(keys + 4u * out[1], a);
         UnpackQuat(keys + 4u * second, b);
-        Copy4(q2, ((quatBlend_fn)kQuatLerp)(r, frac, a, b));
+        Copy4(q2, Lerp(r, frac, a, b));
     }
 
     float r2[4];

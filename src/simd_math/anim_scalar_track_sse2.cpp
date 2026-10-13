@@ -18,6 +18,8 @@
 #include <cstring>
 
 #include "anim_scalar_track_sse2.h"
+#include "m2_anim_find_key_fast.h"
+#include "anim_find_key_core.h"
 #include "MinHook.h"
 #include "version.h"
 #include "config.h"
@@ -58,6 +60,18 @@ typedef void* (__fastcall* findKey_fn)(void* obj, void* edx, void* timing, void*
 typedef void (__cdecl* track_fn)(void* obj, void* state, void* track,
                                  uint32_t* out, const float* defVal);
 
+// The key search, called directly once the hook on sub_8284D0 has proved the same
+// code against the client for its whole learning phase (M2AnimFindKey::g_usable),
+// and through the client's routine until then or after it retires. The direct
+// call drops the trampoline, the detour's prologue and its counters.
+__forceinline void FindKey(void* obj, void* timing, void* track,
+                           uint32_t* hint, uint32_t* second, float* frac) {
+    if (M2AnimFindKey::g_usable)
+        M2AnimFindKeyCore::Run(obj, timing, track, hint, second, frac);
+    else
+        ((findKey_fn)kFindKey)(obj, nullptr, timing, track, hint, second, frac);
+}
+
 track_fn orig_ScalarTrack = nullptr;
 track_fn orig_ColorTrack  = nullptr;
 
@@ -93,8 +107,7 @@ void EvaluateScalar(void* obj, uint8_t* state, uint8_t* track,
     if (entry[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing1, track,
-                               out, &second, &frac);
+        FindKey(obj, state + kS_timing1, track, out, &second, &frac);
         const int16_t* keys = (const int16_t*)entry[1];
         if (interp == 0) {
             *o = (float)((double)keys[out[0]] * scale);
@@ -120,8 +133,7 @@ void EvaluateScalar(void* obj, uint8_t* state, uint8_t* track,
     if (entryB[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing2, track,
-                               out + 1, &second, &frac);
+        FindKey(obj, state + kS_timing2, track, out + 1, &second, &frac);
         const int16_t* keysB = (const int16_t*)entryB[1];
         double aB = (double)keysB[out[1]] * scale;
         double bB = (double)keysB[second] * scale;
@@ -150,8 +162,7 @@ void EvaluateColor(void* obj, uint8_t* state, uint8_t* track,
     if (entry[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing1, track,
-                               out, &second, &frac);
+        FindKey(obj, state + kS_timing1, track, out, &second, &frac);
         const float* keys = (const float*)entry[1];
         if (interp == 0) {
             *o = keys[out[0]];
@@ -177,8 +188,7 @@ void EvaluateColor(void* obj, uint8_t* state, uint8_t* track,
     if (entryB[0]) {
         uint32_t second = 0;
         float    frac   = 0.0f;
-        ((findKey_fn)kFindKey)(obj, nullptr, state + kS_timing2, track,
-                               out + 1, &second, &frac);
+        FindKey(obj, state + kS_timing2, track, out + 1, &second, &frac);
         const float* keysB = (const float*)entryB[1];
         double aB = (double)keysB[out[1]];
         double bB = (double)keysB[second];
