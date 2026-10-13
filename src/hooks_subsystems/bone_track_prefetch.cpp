@@ -35,6 +35,17 @@
 // one is a three-stage pipeline over the bones: each stage's loads are of lines
 // the stage before prefetched six bones earlier, so none of them waits.
 //
+// The whole bone loop, from the pass to the loop's exit at 0x008302A3, with the
+// pass switched on or off at random for each model (temporary timers, A/B
+// harness off, login screen, about 800 models each way a run), cycles a model:
+//
+//     instance records prefetched   with 149647 142103  without 161120 155324   -7.1% -8.5%
+//     not prefetched (as committed) with 143776 164496  without 158387 177921   -9.2% -7.5%
+//
+// so the pass nets 7 to 9% of the bone loop after paying for itself. Dropping
+// the instance-record prefetch, a sequential stream the hardware keeps up with,
+// was no worse, and distances of 3 and 10 bones instead of 6 were no better.
+//
 // Only the quaternion track was timed. The two vector tracks are assumed to
 // behave alike; no frame time has been measured either way. A world has more
 // models and a larger working set, which moves the misses and not the pass, so
@@ -211,9 +222,7 @@ void Pass(const uint8_t* model, const uint8_t* inst) {
                 const uint8_t* r = recs + (size_t)n * kR_size;
                 _mm_prefetch((const char*)(b + kB_trans), _MM_HINT_T0);
                 _mm_prefetch((const char*)(b + kB_scale), _MM_HINT_T0);
-                _mm_prefetch((const char*)r, _MM_HINT_T0);
-                _mm_prefetch((const char*)(r + 0x40), _MM_HINT_T0);
-                _mm_prefetch((const char*)(r + 0x80), _MM_HINT_T0);
+                (void)r;   // the instance records are a sequential stream the hardware keeps up with
             }
             if (n >= kDist && n - kDist < count) {
                 const uint32_t i = n - kDist;
