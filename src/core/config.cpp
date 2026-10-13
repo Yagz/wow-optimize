@@ -245,6 +245,7 @@ static const BoolSetting kBoolSettings[] = {
     { "Graphics_Sound", "ParticleFillFast", &Settings::OptParticleFillFast },
     { "Graphics_Sound", "RibbonEdgeLoop", &Settings::OptRibbonEdgeLoop },
     { "Graphics_Sound", "BoneTrackPrefetch", &Settings::OptBoneTrackPrefetch },
+    { "Graphics_Sound", "BatchChainPrefetch", &Settings::OptBatchChainPrefetch },
     { "Graphics_Sound", "ParticleLoopPrefetch", &Settings::OptParticleLoopPrefetch },
     { "UI_Lua", "AddonMemoryWalk", &Settings::OptAddonMemoryWalk },
     { "Graphics_Sound", "HorizonTestAABB", &Settings::OptHorizonTestAABB },
@@ -917,6 +918,7 @@ static const int kBoolSettingCount = (int)(sizeof(kBoolSettings) / sizeof(kBoolS
         g_settings.OptParticleFillFast     = GetPrivateProfileIntA("Graphics_Sound", "ParticleFillFast", 0, iniPath.c_str()) != 0;
         g_settings.OptRibbonEdgeLoop       = GetPrivateProfileIntA("Graphics_Sound", "RibbonEdgeLoop", 0, iniPath.c_str()) != 0;
         g_settings.OptBoneTrackPrefetch    = GetPrivateProfileIntA("Graphics_Sound", "BoneTrackPrefetch", 1, iniPath.c_str()) != 0;
+        g_settings.OptBatchChainPrefetch   = GetPrivateProfileIntA("Graphics_Sound", "BatchChainPrefetch", 1, iniPath.c_str()) != 0;
         g_settings.OptParticleLoopPrefetch = GetPrivateProfileIntA("Graphics_Sound", "ParticleLoopPrefetch", 0, iniPath.c_str()) != 0;
         g_settings.OptAddonMemoryWalk = GetPrivateProfileIntA("UI_Lua", "AddonMemoryWalk", 0, iniPath.c_str()) != 0;
         g_settings.OptHorizonTestAABB      = GetPrivateProfileIntA("Graphics_Sound", "HorizonTestAABB", 1, iniPath.c_str()) != 0;

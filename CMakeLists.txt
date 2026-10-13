@@ -716,6 +716,8 @@ add_library(wow_optimize SHARED
     src/simd_math/ribbon_edge_loop.h
     src/hooks_subsystems/bone_track_prefetch.cpp
     src/hooks_subsystems/bone_track_prefetch.h
+    src/hooks_subsystems/batch_chain_prefetch.cpp
+    src/hooks_subsystems/batch_chain_prefetch.h
     src/simd_math/ribbon_edge_model.h
     src/simd_math/particle_fill_model.h
     src/simd_math/particle_eval_model.h
