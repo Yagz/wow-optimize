@@ -125,13 +125,19 @@ inline uint32_t SwapRedBlue(uint32_t c) {
 
 // ---- the quad ----
 
-enum class Kind { Unsupported, Flat, Axes, Spin };
+enum class Kind { Unsupported, Flat, Axes, Spin, TailOnly, Nothing };
 
 // What the client would do with this emitter. Flat and Axes need no spin; Spin
 // needs the sine and cosine of an angle; the rest are left to the client.
+//
+// An emitter without the quad flag (0x97BFE8: `test dl,4 / jz 0x97CC10`) builds no first
+// quad. The client goes to 0x97CC10, which tests the tail flag (`test dl,8`): set, it builds
+// the tail alone, from the same front part; clear, it jumps to 0x97D35C and returns 1 with
+// the streams, the bounding box and the vertex count as they were. A third of the calls in a
+// 2026-10-12 session were of this kind.
 inline Kind Classify(const char* em) {
     const uint32_t f = Rd<uint32_t>(em, kOffFlags);
-    if (!(f & kFlagQuad)) return Kind::Unsupported;
+    if (!(f & kFlagQuad)) return (f & kFlagOther) ? Kind::TailOnly : Kind::Nothing;
     // `fldz / fcom [edi+0C8h] / test ah,44h / jp` then the same against 0CCh: both
     // must be exactly equal to zero, so NaN means spin.
     const bool still = (Rd<float>(em, kOffSpinRate) == 0.0f) && (Rd<float>(em, kOffSpinVary) == 0.0f);

@@ -3,7 +3,21 @@
 //
 // The per-particle vertex fill, sub_97BE80, for the three kinds of emitter that
 // make up nearly all particles: a flat quad, a quad placed along two axes, and
-// a quad spun by an angle. Everything else is handed to the client.
+// a quad spun by an angle; and for an emitter with no first quad at all, which
+// builds only the tail (flag 0x8) or, with that clear too, nothing. Everything
+// else (a spun quad placed along axes) is handed to the client.
+//
+// The no-quad kinds were a third of the calls in a 2026-10-12 session (66 of 203
+// million that were not in an A/B control half). The client runs its whole front
+// part for them - the track evaluator, the spin values, the transform of the
+// position - and then either builds the tail at 0x97CC10 or returns 1 at 0x97D35C
+// having written nothing. Tail only: this builds it from the same frame, with the
+// arithmetic of the second quad, which the offline harness checks against the
+// client's own instruction sequence. Neither quad nor tail: the call is pure, so it
+// is not made. The harness result for these, with the quad flag cleared in a share
+// of the emitters, including NaN, infinity, denormals, signed zeros and box edges
+// within ulps of a corner: about 3.4 million tail-only and 10 million no-quad
+// no-tail fills compared byte for byte, 0 differences.
 //
 // In an uncapped tester session (drain, 2026-10-04) the function and the blocks
 // of it the profiler names are the largest region of the particle update that
@@ -214,8 +228,8 @@ unsigned long long g_declined = 0;    // handed back, of which the three below
 unsigned long long g_declNaN = 0, g_declAngle = 0, g_declStride = 0, g_declDevice = 0;
 unsigned long long g_early = 0;
 // One slot per kind and per whether a second quad (flag 0x8) follows, so each is learned alone.
-unsigned long long g_answered[12] = {};
-unsigned long      g_verified[12] = {};
+unsigned long long g_answered[14] = {};
+unsigned long      g_verified[14] = {};
 unsigned           g_mismatches = 0;
 unsigned           g_unstable = 0;     // differences that the evaluator's own re-run explains
 
@@ -245,10 +259,11 @@ inline unsigned long long SumAnswered(int from, int to) {
     return n;
 }
 
-const char* const kKindName[12] = { "flat", "axes", "spin", "flat with a second quad", "axes with a second quad",
+const char* const kKindName[14] = { "flat", "axes", "spin", "flat with a second quad", "axes with a second quad",
                                      "spin with a second quad", "flat facing the velocity", "axes facing the velocity",
                                      "spin facing the velocity", "flat facing the velocity with a second quad",
-                                     "axes facing the velocity with a second quad", "spin facing the velocity with a second quad" };
+                                     "axes facing the velocity with a second quad", "spin facing the velocity with a second quad",
+                                     "tail only, no first quad", "no quad and no tail" };
 
 // Private streams for the learning phase. Main thread only, which the detour checks.
 alignas(16) char g_scratch[4][8 * kMaxStride + 32];
@@ -298,6 +313,12 @@ __declspec(safebuffers) int Process(char* em, float* particle, Streams* s, float
     unsigned idx;
     if (!Select(em, particle, (uintptr_t)particle, k.table, &idx)) return kEarly;
 
+    // No quad and no tail: the client evaluates the particle, takes its spin values and transforms
+    // its position, then returns 1 having written nothing a caller reads. The evaluator, the spin
+    // values (their only other work is a generator in their own frame) and the transform are pure,
+    // so none of it is asked for.
+    if (kind == Kind::Nothing) return kEmitted;
+
     const uint32_t flags = Rd<uint32_t>(em, kOffFlags);
     Evaluated e;
     e.colour = 0; e.w = 0.0f; e.h = 0.0f; e.tile = 0; e.extra = 0;
@@ -324,6 +345,18 @@ __declspec(safebuffers) int Process(char* em, float* particle, Streams* s, float
     f.colour = e.colour;
     f.tile = e.tile;
     f.sinv = 0.0f; f.cosv = 0.0f;
+
+    // The tail alone: the client's front part is the same as for a quad, then it goes straight to
+    // the tail at 0x97CC10, which reads the frame, the evaluator's second tile number and the
+    // particle, and nothing the first quad would have written.
+    if (kind == Kind::TailOnly) {
+        Quad tq;
+        BuildTail(em, k, f, e.extra, particle, &tq);
+        if (!AllFinite(tq)) { ++g_declNaN; return kDecline; }
+        Commit(tq, k, box, s);
+        return kEmitted;
+    }
+
     const Cell cell = CellOrigin(em, e.tile);
 
     Quad q;
@@ -502,6 +535,8 @@ __declspec(noinline) void CheckEvaluator(char* em, float* particle) {
 // facing the velocity or not (a property of the particle's speed as well as the emitter).
 inline int SlotOf(const char* em, const float* particle, Kind kind) {
     const uint32_t flags = Rd<uint32_t>(em, kOffFlags);
+    if (kind == Kind::TailOnly) return 12;
+    if (kind == Kind::Nothing) return 13;
     int slot = (int)kind - 1;
     if (flags & kFlagOther) slot += 3;
     if ((flags & kFlagFacing) && FacingActive(particle, Client())) slot += 6;
@@ -512,7 +547,8 @@ __declspec(noinline) int Learn(char* em, void* edx, float* particle, Streams* vb
     const Constants k = Client();
     const bool tail = (Rd<uint32_t>(em, kOffFlags) & kFlagOther) != 0;
     const int ki = SlotOf(em, particle, kind);
-    const int nv = tail ? 8 : 4;
+    // Vertices the client writes: a first quad and a tail, either alone, or nothing at all.
+    const int nv = (kind == Kind::Nothing) ? 0 : (kind == Kind::TailOnly) ? 4 : (tail ? 8 : 4);
 
     // A stride of zero is legal (a stream without normals writes every vertex to one dummy
     // location, and both sides write the same bytes there in the same order); a negative one
@@ -666,9 +702,10 @@ bool Init() {
     SamplingProfiler::RegisterSelfSymbol("ParticleFillFast", (const void*)&Detour);
 
     Log("[ParticleFillFast] ACTIVE on the per-particle vertex fill (sub_97BE80 @ 0x%08X) for "
-        "flat, axis-placed and spun quads. The rest of the client's function is its own "
-        "instruction sequence per particle, four corners, six bounding box compares a corner and "
-        "four streams; this does the same arithmetic in SSE2 doubles at the client's rounding. "
+        "flat, axis-placed and spun quads, and for an emitter with no first quad (the tail alone, or "
+        "nothing). The client's function is its own instruction sequence per particle, four corners, "
+        "six bounding box compares a corner and four streams; this does the same arithmetic in SSE2 "
+        "doubles at the client's rounding. "
         "The first %lu fills of each kind are worked out here into private buffers, then run by "
         "the client, and compared byte for byte; then one call in %lu.",
         (unsigned)kTarget, kLearnCalls, kResampleMask + 1);
@@ -700,11 +737,11 @@ void LogStats() {
         "handed back (%llu a NaN in the answer, %llu a NaN spin angle, %llu a stride the check "
         "cannot hold, %llu no device object), %llu from another thread, after a retirement or in "
         "the A/B control half. Plain counters, lower bounds.",
-        g_calls, SumAnswered(0, 12),
+        g_calls, SumAnswered(0, 14),
         g_answered[0] + g_answered[3] + g_answered[6] + g_answered[9],
         g_answered[1] + g_answered[4] + g_answered[7] + g_answered[10],
         g_answered[2] + g_answered[5] + g_answered[8] + g_answered[11],
-        SumAnswered(3, 6) + SumAnswered(9, 12), g_early, g_unsupported, g_declined, g_declNaN, g_declAngle, g_declStride,
+        SumAnswered(3, 6) + SumAnswered(9, 12) + g_answered[12], g_early, g_unsupported, g_declined, g_declNaN, g_declAngle, g_declStride,
         g_declDevice, g_other);
     Log("[ParticleFillFast]   of the %llu handed back as a kind this does not do: "
         "%llu a spin on axes, %llu not a quad at all. Plain counters, lower bounds.",
@@ -727,7 +764,10 @@ void LogStats() {
             "line that says which is earlier in this log.");
         return;
     }
-    for (int i = 0; i < 12; ++i) {
+    Log("[ParticleFillFast]   of those answered, %llu were a tail with no first quad and %llu had neither quad nor tail "
+        "(the client's front part skipped: the evaluator, the spin values and the transform).",
+        g_answered[12], g_answered[13]);
+    for (int i = 0; i < 14; ++i) {
         if (g_verified[i] < kLearnCalls)
             Log("[ParticleFillFast]   %s: %lu of %lu fills compared with the client so far, none "
                 "differed; until then every fill of this kind is the client's own.",
