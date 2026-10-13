@@ -35,10 +35,21 @@
 // Each replacement passes straight through to the original whenever this module
 // is not active for the pass, so the client's two-thread mode runs unchanged.
 //
-// What this does not have: a phase that compares against the client. A root
-// cannot be animated twice - the bone loop advances a clock at +4Ch - so the
-// correctness case rests on the analysis above and on the client already running
-// roots concurrently. A fault on a worker retires the module for the session.
+// What this does not have: a phase that compares results against the client. A
+// root cannot be animated twice - the bone loop advances a clock at +4Ch - so
+// the correctness case rests on the analysis above and on the client already
+// running roots concurrently. A fault on a worker retires the module for the
+// session.
+//
+// What it has instead is a comparison of time, on the machine it runs on. One
+// pass in kProbeEvery is left to the client's own two-thread way, and the main
+// thread's time per root over those passes is set against its time per root
+// over the parallel passes. A field session on a 16-thread machine measured
+// 0.65 of the client's time per pass; nothing below that was measured, and a
+// machine with few cores or a busy one can lose the difference to worker
+// wake-up and the spin on the wait. If ours is the slower of the two once each
+// side has kProbeEnough passes, the module retires itself for the session and
+// says so.
 //
 // Not with M2UseThreads 0: that path (the second loop in sub_821A20) is untouched.
 // Not with AnimLod, M2AnimStride, M2AnimReuse, AnimCensus or AnimTrackCensus on:
@@ -77,6 +88,8 @@ constexpr int  kMaxRoots      = 4096;
 constexpr int  kMaxWorkers    = 3;
 constexpr int  kMinParallel   = 8;      // fewer roots than this run on the main thread alone
 constexpr long kSerialPasses  = 300;    // the client's own way first, so lazy statics are set
+constexpr unsigned kProbeEvery = 16;    // once engaged, one pass in this many is the client's way
+constexpr unsigned long kProbeEnough = 300;  // passes of each kind, of >= kMinParallel roots, before judging
 
 // ECX = model, then five stack arguments, callee cleans: reached as __fastcall
 // with a dummy EDX, as elsewhere in this tree.
@@ -120,6 +133,14 @@ unsigned long g_overflow = 0;
 uint64_t      g_rootsRun = 0;
 LONGLONG      g_ourTicks = 0, g_clientTicks = 0;
 LONGLONG      g_passStart = 0;
+// The self-measurement. g_probing is set for a pass left to the client; the
+// roots it animates are counted from both of its threads.
+volatile LONG g_probing = 0;
+volatile LONG g_passRoots = 0;
+unsigned long g_probePasses = 0, g_parTimed = 0;
+uint64_t      g_probeRoots = 0, g_parRoots = 0;
+LONGLONG      g_probeTicks = 0, g_parTicks = 0;
+volatile LONG g_retiredSlower = 0;
 volatile LONG g_faults = 0;
 volatile uintptr_t g_faultModel = 0;
 // For the per-interval figures.
@@ -201,12 +222,14 @@ void Record(void* model, void* root, const float* ones, const float* zeros, floa
 int __fastcall Site_Animate(void* model, void* edx, void* root, const float* ones,
                             const float* zeros, float f1, float f2) {
     if (g_deferring && OnDeferringThread()) { Record(model, root, ones, zeros, f1, f2, 0); return 0; }
+    if (g_probing) InterlockedIncrement(&g_passRoots);
     return ((Animate_fn)kAnimate)(model, edx, root, ones, zeros, f1, f2);
 }
 
 int __fastcall Site_AnimateAlt(void* model, void* edx, void* root, const float* ones,
                                const float* zeros, float f1, float f2) {
     if (g_deferring && OnDeferringThread()) { Record(model, root, ones, zeros, f1, f2, 1); return 0; }
+    if (g_probing) InterlockedIncrement(&g_passRoots);
     return ((Animate_fn)kAnimateAlt)(model, edx, root, ones, zeros, f1, f2);
 }
 
@@ -214,6 +237,12 @@ int __fastcall Site_Dispatch(void* mgr, void* edx, void* cb, void* arg) {
     g_passStart = Now();
     bool engage = g_installed && !g_retired && cb == (void*)kWorkerCb && g_waits >= (unsigned long)kSerialPasses;
     if (engage && g_abSubject && AbTest::StandAside()) engage = false;
+    if (engage && (g_waits % kProbeEvery) == 0) {
+        // Left to the client, to have something to set our time against.
+        g_passRoots = 0;
+        g_probing = 1;
+        engage = false;
+    }
     if (!engage) return ((Dispatch_fn)kDispatchFn)(mgr, edx, cb, arg);
 
     // Active: the client's worker is not woken. Its share is recorded here, the
@@ -225,17 +254,46 @@ int __fastcall Site_Dispatch(void* mgr, void* edx, void* cb, void* arg) {
     return 0;
 }
 
+// Called on the main thread after a probe pass. Retires the module when its
+// time per root, over passes of the same size class, is the larger of the two.
+void Judge() {
+    if (g_retired || g_probePasses < kProbeEnough || g_parTimed < kProbeEnough) return;
+    const double ours = (double)g_parTicks / (double)g_parRoots;
+    const double theirs = (double)g_probeTicks / (double)g_probeRoots;
+    if (ours <= theirs) return;
+    InterlockedExchange(&g_retiredSlower, 1);
+    InterlockedExchange(&g_retired, 1);
+    const double toUs = 1000000.0 / (double)g_freq.QuadPart;
+    Log("[M2ParallelRoots] RETIRED: on this machine the main thread spends %.2f us a root animating them our way "
+        "(%lu passes of %.1f roots) against %.2f us the client's own two-thread way (%lu passes of %.1f roots). "
+        "The client's own path runs from here.",
+        ours * toUs, g_parTimed, (double)g_parRoots / (double)g_parTimed,
+        theirs * toUs, g_probePasses, (double)g_probeRoots / (double)g_probePasses);
+}
+
 DWORD __fastcall Site_Wait(void* mgr, void* edx) {
     ++g_waits;
     if (!g_deferring) {
         const DWORD r = ((Wait_fn)kWaitFn)(mgr, edx);
-        g_clientTicks += Now() - g_passStart;
+        const LONGLONG took = Now() - g_passStart;
+        g_clientTicks += took;
         ++g_clientPasses;
+        if (g_probing) {
+            g_probing = 0;
+            const LONG roots = g_passRoots;
+            if (roots >= kMinParallel) {
+                ++g_probePasses;
+                g_probeRoots += (uint64_t)roots;
+                g_probeTicks += took;
+                Judge();
+            }
+        }
         return r;
     }
     g_deferring = 0;
     const LONG n = g_count;
     g_next = 0;
+    bool parallel = false;
     if (n >= kMinParallel && g_workers > 0) {
         unsigned short cw;
         __asm fnstcw cw
@@ -250,12 +308,19 @@ DWORD __fastcall Site_Wait(void* mgr, void* edx) {
             if (++spins < 4000) YieldProcessor(); else SwitchToThread();
         }
         ++g_parallelPasses;
+        parallel = true;
     } else {
         RunItems();
         ++g_soloPasses;
     }
     g_rootsRun += (uint64_t)n;
-    g_ourTicks += Now() - g_passStart;
+    const LONGLONG took = Now() - g_passStart;
+    g_ourTicks += took;
+    if (parallel) {
+        ++g_parTimed;
+        g_parRoots += (uint64_t)n;
+        g_parTicks += took;
+    }
     return 0;
 }
 
@@ -340,8 +405,11 @@ void Init() {
     g_abSubject = AbTest::IsSubject("M2ParallelRoots", &g_abSubject);
     Log("[M2ParallelRoots] ACTIVE: the root models of a scene are animated on %d thread(s) of ours plus the main thread "
         "instead of the client's two, after the first %ld passes the client's own way. Only with M2UseThreads 1. No "
-        "comparison against the client is possible here (a root cannot be animated twice); a fault on a worker retires "
-        "it. Not run in a game.", g_workers, kSerialPasses);
+        "comparison of results is possible here (a root cannot be animated twice); a fault on a worker retires it. "
+        "One pass in %u is left to the client and the main thread's time per root is compared with ours; if ours is "
+        "the slower after %lu passes of each, it retires itself. Field result so far: one 16-thread machine, 3 h on "
+        "two clients, 0.65 of the client's time per pass, no fault.",
+        g_workers, kSerialPasses, kProbeEvery, kProbeEnough);
 }
 
 void LogStats() {
@@ -361,7 +429,8 @@ void LogStats() {
     Log("[M2ParallelRoots] %s. Since the last report: %lu pass(es) ours (%lu parallel, %lu under %d roots on the main "
         "thread), %.3f ms each on the main thread with %.1f roots on average; %lu the client's own two-thread way, "
         "%.3f ms each. Session: %lu ours, %lu the client's. Plain counters, lower bounds.",
-        g_retired ? "RETIRED: a worker faulted" : "running",
+        g_retiredSlower ? "RETIRED: slower than the client's way on this machine"
+                        : (g_retired ? "RETIRED: a worker faulted" : "running"),
         iOur, g_parallelPasses - g_prevParallel, g_soloPasses - g_prevSolo, kMinParallel,
         iOur ? (double)iOurT * toMs / (double)iOur : 0.0, iOur ? (double)iRoots / (double)iOur : 0.0,
         iClient, iClient ? (double)iClientT * toMs / (double)iClient : 0.0,
@@ -372,6 +441,17 @@ void LogStats() {
     if (g_overflow)
         Log("[M2ParallelRoots]   %lu root(s) did not fit the %d-entry table and ran at once on the main thread.",
             g_overflow, kMaxRoots);
+    if (g_probePasses && g_parTimed) {
+        const double toUs = 1000000.0 / (double)g_freq.QuadPart;
+        Log("[M2ParallelRoots]   self-measurement, session: %.2f us a root ours over %lu parallel passes against "
+            "%.2f us a root the client's way over %lu probe passes%s. Plain counters, lower bounds.",
+            (double)g_parTicks * toUs / (double)g_parRoots, g_parTimed,
+            (double)g_probeTicks * toUs / (double)g_probeRoots, g_probePasses,
+            (g_probePasses < kProbeEnough || g_parTimed < kProbeEnough) ? " (not yet enough of either to judge)" : "");
+    } else {
+        Log("[M2ParallelRoots]   self-measurement: not measured yet (%lu probe pass(es), %lu timed parallel pass(es) "
+            "of %d or more roots).", g_probePasses, g_parTimed, kMinParallel);
+    }
     g_prevParallel = g_parallelPasses; g_prevSolo = g_soloPasses; g_prevClient = g_clientPasses;
     g_prevRoots = g_rootsRun; g_prevOurTicks = g_ourTicks; g_prevClientTicks = g_clientTicks;
 }
