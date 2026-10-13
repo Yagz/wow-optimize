@@ -720,6 +720,7 @@ namespace Config {
         bool OptParallelParticles = false;
         bool OptM2ParallelRoots = false;
         bool OptParticleFillFast = false;
+        bool OptRibbonEdgeLoop = false;
         bool OptParticleLoopPrefetch = false;
         bool OptAddonMemoryWalk = false;
         bool OptHorizonTestAABB = true;

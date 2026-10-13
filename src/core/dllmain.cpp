@@ -134,6 +134,7 @@
 #include "m2_parallel_roots.h"
 #include "shader_const_dedup_sse2.h"
 #include "batch_colour_convert.h"
+#include "ribbon_edge_loop.h"
 #include "floor_split_sse2.h"
 #include "frustum_aabb_sse2.h"
 #include "segment_aabb_sse2.h"
@@ -6075,6 +6076,7 @@ static void DumpPeriodicStats(const char* why, bool atProcessExit) {
     STAT_TIME("ParallelParticles::LogStats", ParallelParticles::LogStats());
     STAT_TIME("M2ParallelRoots::LogStats", M2ParallelRoots::LogStats());
     STAT_TIME("ParticleFillFast::LogStats", ParticleFillFast::LogStats());
+    STAT_TIME("RibbonEdgeLoop::LogStats", RibbonEdgeLoop::LogStats());
     STAT_TIME("ParticleLoopPrefetch::LogStats", ParticleLoopPrefetch::LogStats());
     STAT_TIME("AddonMemoryWalk::LogStats", AddonMemoryWalk::LogStats());
     STAT_TIME("AsyncPollSpin::LogStats", AsyncPollSpin::LogStats());
@@ -8874,6 +8876,7 @@ static DWORD WINAPI MainThread(LPVOID param) {
     ParallelParticles::Init();
     M2ParallelRoots::Init();
     ParticleFillFast::Init();
+    RibbonEdgeLoop::Init();
     ParticleLoopPrefetch::Init();
     AddonMemoryWalk::Init();
     AsyncPollSpin::Init();
@@ -11917,6 +11920,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
             ParticleQuad::Shutdown();
             ParallelParticles::Shutdown();
             ParticleFillFast::Shutdown();
+            RibbonEdgeLoop::Shutdown();
             ParticleLoopPrefetch::Shutdown();
             AddonMemoryWalk::Shutdown();
             AsyncPollSpin::Shutdown();
