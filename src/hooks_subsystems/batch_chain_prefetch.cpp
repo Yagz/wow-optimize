@@ -80,6 +80,8 @@ const unsigned char kResumeWant[6] = { 0x8D, 0x1C, 0xBA, 0x8B, 0x55, 0x0C };
 
 constexpr unsigned kRecSize  = 68;
 constexpr unsigned kRec_obj1 = 4;
+constexpr unsigned kRec_runObj = 24;
+constexpr uint32_t kType_run = 4;
 constexpr unsigned kO1_flags = 0x10;
 constexpr unsigned kO1_obj2  = 0x2C;
 constexpr unsigned kO1_tex   = 0xA4;
@@ -113,7 +115,19 @@ __forceinline void StageRec(const uint8_t* base, const uint32_t* idx, uint32_t k
 }
 
 __forceinline void StageObj1(const uint8_t* base, const uint32_t* idx, uint32_t k) {
-    const uint8_t* obj1 = *(const uint8_t* const*)(RecordAt(base, idx, k) + kRec_obj1);
+    const uint8_t* rec = RecordAt(base, idx, k);
+    if (*(const uint32_t*)rec == kType_run) {
+        // A run of batches that sub_821100 merges: it compares the fields of the
+        // object at +18h of every record in the run.
+        const uint8_t* run = *(const uint8_t* const*)(rec + kRec_runObj);
+        if (run) {
+            _mm_prefetch((const char*)(run + 0x50), _MM_HINT_T0);
+            _mm_prefetch((const char*)(run + 0x8C), _MM_HINT_T0);
+            _mm_prefetch((const char*)(run + 0xD0), _MM_HINT_T0);
+            _mm_prefetch((const char*)(run + 0x128), _MM_HINT_T0);
+        }
+    }
+    const uint8_t* obj1 = *(const uint8_t* const*)(rec + kRec_obj1);
     if (!obj1) return;
     _mm_prefetch((const char*)(obj1 + kO1_flags), _MM_HINT_T0);
     _mm_prefetch((const char*)(obj1 + kO1_obj2), _MM_HINT_T0);
